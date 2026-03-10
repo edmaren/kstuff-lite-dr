@@ -74,14 +74,14 @@ static int handle_crypto_message(uint64_t* regs, uint64_t msg, uint64_t bytes_ca
             *bytes_handled += n_sectors << 12;
             return 0;
         }
-        *bytes_handled = bytes_cap + 4096;
-        if(pfs_xts_virtual(msg_data[3] + (offset << 12), msg_data[2] + (offset << 12), key, msg_data[4] + offset, 1, (msg_data[0] & 0x800) >> 11))
+        uint32_t remaining_sectors = n_sectors - offset;
+        *bytes_handled += n_sectors << 12;
+        if(pfs_xts_virtual(msg_data[3] + (offset << 12), msg_data[2] + (offset << 12), key, msg_data[4] + offset, remaining_sectors, (msg_data[0] & 0x800) >> 11))
         {
             //log_word(0xfee1fee1fee1fee1);
             return -1;
         }
-        else
-            return (offset == n_sectors - 1) ? 0 : EINTR;
+        return 0;
     }
     //log_word(0xdead0006dead0006);
     //log_word(msg);
