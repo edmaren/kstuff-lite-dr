@@ -102,9 +102,11 @@ int try_handle_npdrm_mailbox(uint64_t *regs, uint64_t lr)
 #endif
     }
 
+    uelf_fpu_enter();
     uint8_t contentid_hash[32];
     if (sha256_buffer(layout.rif.contentId, sizeof(layout.rif.contentId), contentid_hash))
     {
+        uelf_fpu_exit();
 #ifdef NPDRM_PORTING
         return 0;
 #else
@@ -114,6 +116,7 @@ int try_handle_npdrm_mailbox(uint64_t *regs, uint64_t lr)
 
     if (memcmp(contentid_hash, layout.rif.rifIv, 16) != 0)
     {
+        uelf_fpu_exit();
 #ifdef NPDRM_PORTING
         return 0;
 #else
@@ -163,11 +166,13 @@ int try_handle_npdrm_mailbox(uint64_t *regs, uint64_t lr)
         uint8_t decrypted_secret[sizeof(layout.rif.rifSecret)];
         if (aes_cbc_128_decrypt(decrypted_secret, layout.rif.rifSecret, sizeof(layout.rif.rifSecret), rif_debug_key, layout.rif.rifIv))
         {
+            uelf_fpu_exit();
             return 1;
         }
 
         if (memcmp(contentid_hash + 16, decrypted_secret, 16) != 0)
         {
+            uelf_fpu_exit();
             // does not use debug rif key/failed to decrypt?
             return 1;
         }
@@ -181,6 +186,7 @@ int try_handle_npdrm_mailbox(uint64_t *regs, uint64_t lr)
     uint32_t res = 0;
     copy_to_kernel(regs[RDX] + 0x4, &res, sizeof(res));
 
+    uelf_fpu_exit();
     regs[RIP] = lr;
     regs[RAX] = 0;
     regs[RSP] += 8;

@@ -6,6 +6,7 @@
 #include "log.h"
 #include "pfs_crypto.h"
 #include "fakekeys.h"
+#include "fpu.h"
 
 extern char sceSblServiceMailbox[];
 extern char sceSblServiceMailbox_lr_verifySuperBlock[];
@@ -104,9 +105,11 @@ static int handle_crypto_request(uint64_t* regs, uint64_t bytes_handled)
     int total = 0;
     int emulated = 0;
     int total_status = 0;
+    int handled = 0;
     uint64_t new_bytes_handled = 0;
 
     uint64_t start = (fwver >= 0x800) ? regs[RBX] : regs[R14];
+    uelf_fpu_enter();
 
     for (uint64_t msg = start; msg && !total_status; msg = kpeek64(msg + 320))
     {
@@ -120,7 +123,8 @@ static int handle_crypto_request(uint64_t* regs, uint64_t bytes_handled)
             };
             push_stack(regs, frame, sizeof(frame));
             regs[RIP] = (uint64_t)doreti_iret;
-            return 1;
+            handled = 1;
+            goto exit;
         }
 
         total++;
@@ -147,10 +151,12 @@ static int handle_crypto_request(uint64_t* regs, uint64_t bytes_handled)
         uint64_t end_time = rdtsc();
         /*log_word(0x1234);
         log_word(end_time - start_time);*/
-        return 1;
+        handled = 1;
     }
 
-    return 0;
+exit:
+    uelf_fpu_exit();
+    return handled;
 }
 
 int try_handle_fpkg_trap(uint64_t* regs)
