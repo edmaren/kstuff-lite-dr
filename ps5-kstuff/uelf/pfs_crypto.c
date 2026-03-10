@@ -85,6 +85,7 @@ int pfs_xts_virtual(uint64_t dst, uint64_t src, const uint8_t* key, uint64_t sta
 {
     enum { SECTOR_SIZE = 4096 };
     static int aes_cipher = -1;
+    static uint8_t input[SECTOR_SIZE], output[SECTOR_SIZE];
     int ans = -1;
     uelf_fpu_enter();
     if(aes_cipher < 0)
@@ -99,9 +100,36 @@ int pfs_xts_virtual(uint64_t dst, uint64_t src, const uint8_t* key, uint64_t sta
     }
     symmetric_xts xts = {};
     xts_start(aes_cipher, key+16, key, 16, 0, &xts);
-    while(count--)
+    while(count)
     {
-        static uint8_t input[SECTOR_SIZE], output[SECTOR_SIZE];
+        uint64_t src_phys, src_end, dst_phys, dst_end;
+        if(virt2phys(src, &src_phys, &src_end) && virt2phys(dst, &dst_phys, &dst_end)
+        && src_end - src_phys >= SECTOR_SIZE && dst_end - dst_phys >= SECTOR_SIZE)
+        {
+            uint64_t src_span = (src_end - src_phys) >> 12;
+            uint64_t dst_span = (dst_end - dst_phys) >> 12;
+            uint32_t run = count;
+            if(run > src_span)
+                run = src_span;
+            if(run > dst_span)
+                run = dst_span;
+            while(run--)
+            {
+                uint64_t tweak[2] = {start, 0};
+                if(is_encrypt)
+                    xts_encrypt(DMEM + src_phys, SECTOR_SIZE, DMEM + dst_phys, (void*)tweak, &xts);
+                else
+                    xts_decrypt(DMEM + src_phys, SECTOR_SIZE, DMEM + dst_phys, (void*)tweak, &xts);
+                dst_phys += SECTOR_SIZE;
+                src_phys += SECTOR_SIZE;
+                dst += SECTOR_SIZE;
+                src += SECTOR_SIZE;
+                start++;
+                count--;
+            }
+            continue;
+        }
+
         uint64_t tweak[2] = {start, 0};
         if(copy_from_kernel(input, src, SECTOR_SIZE))
             goto exit;
@@ -114,6 +142,7 @@ int pfs_xts_virtual(uint64_t dst, uint64_t src, const uint8_t* key, uint64_t sta
         dst += SECTOR_SIZE;
         src += SECTOR_SIZE;
         start++;
+        count--;
     }
     xts_done(&xts);
     ans = 0;
