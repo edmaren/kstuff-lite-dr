@@ -2,11 +2,9 @@
 #include <sys/types.h>
 #include <sys/mman.h>
 #include <sys/sysctl.h>
-#include <sys/user.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdarg.h>
-#include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -372,37 +370,17 @@ void build_uelf_cr3(uint64_t uelf_cr3, void* uelf_base[2], uint64_t uelf_virt_ba
 
 int find_proc(const char* name)
 {
-    enum { PROC_LIST_RETRIES = 4, PROC_LIST_SLACK = 16 };
-    int key[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PROC, 0};
-    for(int attempt = 0; attempt < PROC_LIST_RETRIES; attempt++)
+    for(int pid = 1; pid < 1024; pid++)
     {
-        size_t sz = 0;
-        if(sysctl(key, 4, 0, &sz, 0, 0))
-            return -1;
-        if(sz > (size_t)-1 - PROC_LIST_SLACK * sizeof(struct kinfo_proc))
-            return -1;
-        size_t alloc_sz = sz + PROC_LIST_SLACK * sizeof(struct kinfo_proc);
-        struct kinfo_proc* proc_list = mmap(0, alloc_sz, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANON, -1, 0);
-        if(proc_list == MAP_FAILED)
-            return -1;
-        size_t out_sz = alloc_sz;
-        if(!sysctl(key, 4, proc_list, &out_sz, 0, 0))
-        {
-            size_t count = out_sz / sizeof(*proc_list);
-            for(size_t i = 0; i < count; i++)
-                if(!strcmp(proc_list[i].ki_comm, name))
-                {
-                    int pid = proc_list[i].ki_pid;
-                    munmap(proc_list, alloc_sz);
-                    return pid;
-                }
-            munmap(proc_list, alloc_sz);
-            return -1;
-        }
-        int saved_errno = errno;
-        munmap(proc_list, alloc_sz);
-        if(saved_errno != ENOMEM)
-            return -1;
+        size_t sz = 1096;
+        int key[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, pid};
+        char buf[1097] = {0};
+        sysctl(key, 4, buf, &sz, 0, 0);
+        const char* a = buf + 447;
+        const char* b = name;
+        while(*a && *a++ == *b++);
+        if(!*a && !*b)
+            return pid;
     }
     return -1;
 }
