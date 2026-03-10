@@ -14,6 +14,23 @@ static uint64_t s_auth_info_for_exec[17] = {0x4400001084c2052d, 0x20000380000000
 static uint64_t s_auth_info_for_dynlib_ps4[17] = {0x3100000000000002, 0x0000000000000000, 0x000000000000ff00, 0x0000000000000000, 0x0000000000000000, 0x3000300040000000, 0x4000000000000000, 0x0080000000000000, 0xf0000000ffff4000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000};
 static uint64_t s_auth_info_for_exec_ps4[17] = {0x3100000000000001, 0x2000038000000000, 0x000000000000ff00, 0x0000000000000000, 0x0000000000000000, 0x4000400040000000, 0x4000000000000000, 0x0080000000000002, 0xf0000000ffff4000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000};
 
+struct fself_header_info
+{
+    int is_fself;
+    uint16_t e_type;
+    int is_ps4;
+    int have_authinfo;
+    uint64_t authinfo[17];
+};
+
+static struct
+{
+    uint64_t header;
+    uint32_t size;
+    int valid;
+    struct fself_header_info info;
+} s_header_cache;
+
 static int copy_from_kernel_buffer(void* dst, uint64_t src, uint64_t src_end, uint64_t offset, size_t sz)
 {
     if(src + offset < src || src + offset > src_end)
@@ -23,20 +40,19 @@ static int copy_from_kernel_buffer(void* dst, uint64_t src, uint64_t src_end, ui
     return copy_from_kernel(dst, src + offset, sz);
 }
 
-static int is_header_fself(uint64_t header, uint32_t size, uint16_t* e_type, int* is_ps4, uint64_t* authinfo, int* have_authinfo)
+static int parse_header_fself(uint64_t header, uint32_t size, struct fself_header_info* info)
 {
     uint64_t header_end = header + size;
     uint16_t n_entries;
+    memset(info, 0, sizeof(*info));
     if(copy_from_kernel_buffer(&n_entries, header, header_end, 24, sizeof(n_entries)))
         return 0;
     uint64_t elf_offset = 32 + 32 * n_entries;
     uint64_t elf[8];
     if(copy_from_kernel_buffer(elf, header, header_end, elf_offset, sizeof(elf)))
         return 0;
-    if(e_type)
-        *e_type = elf[2];
-    if(is_ps4)
-        *is_ps4 = (uint8_t)elf[1] < 2;
+    info->e_type = elf[2];
+    info->is_ps4 = (uint8_t)elf[1] < 2;
     uint64_t e_phoff = elf[4];
     uint16_t e_phnum = elf[7];
     uint64_t ex_offset = elf_offset + e_phoff + 56 * e_phnum;
@@ -46,18 +62,43 @@ static int is_header_fself(uint64_t header, uint32_t size, uint16_t* e_type, int
         return 0;
     if(ex[1] != 1) //not fself
         return 0;
-    if(have_authinfo)
-    {
-        *have_authinfo = 0;
-        uint64_t sig_off = ex_offset + 64 + 48 + n_entries * 80 + 80;		
-        uint64_t signature[18] = {0};
+    info->is_fself = 1;
+    uint64_t sig_off = ex_offset + 64 + 48 + n_entries * 80 + 80;
+    uint64_t signature[18] = {0};
 
-        if(!copy_from_kernel_buffer(signature, header, header_end, sig_off, sizeof(signature)) && signature[0] == 0x88)
-        {
-			memcpy(authinfo, signature+1, 0x88);
-            *have_authinfo = 1;
-        }
+    if(!copy_from_kernel_buffer(signature, header, header_end, sig_off, sizeof(signature)) && signature[0] == 0x88)
+    {
+        memcpy(info->authinfo, signature+1, 0x88);
+        info->have_authinfo = 1;
     }
+    return info->is_fself;
+}
+
+static const struct fself_header_info* get_header_fself_info(uint64_t header, uint32_t size)
+{
+    if(!s_header_cache.valid || s_header_cache.header != header || s_header_cache.size != size)
+    {
+        s_header_cache.header = header;
+        s_header_cache.size = size;
+        s_header_cache.valid = 1;
+        parse_header_fself(header, size, &s_header_cache.info);
+    }
+    return &s_header_cache.info;
+}
+
+static int is_header_fself(uint64_t header, uint32_t size, uint16_t* e_type, int* is_ps4, uint64_t* authinfo, int* have_authinfo)
+{
+    const struct fself_header_info* info = get_header_fself_info(header, size);
+    if(!info->is_fself)
+        return 0;
+    if(e_type)
+        *e_type = info->e_type;
+    if(is_ps4)
+        *is_ps4 = info->is_ps4;
+    if(authinfo)
+        memcpy(authinfo, info->authinfo, sizeof(info->authinfo));
+    if(have_authinfo)
+        *have_authinfo = info->have_authinfo;
     return 1;
 }
 
@@ -117,6 +158,7 @@ static uint64_t dbgregs_for_decryptMultipleSelfBlocks[6] = {
 
 void handle_fself_syscall(uint64_t* regs)
 {
+    s_header_cache.valid = 0;
 	start_syscall_with_dbgregs(regs, dbgregs_for_fself);
 }
 
