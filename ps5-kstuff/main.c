@@ -61,12 +61,34 @@ static void kpoke64(void* dst, uint64_t src)
     kmemcpy(dst, &src, 8);
 }
 
+enum { KZERO_CHUNK_SIZE = 1 << 16 };
+
+static void* get_zero_chunk(void)
+{
+    static char* zero_chunk;
+    if(!zero_chunk)
+    {
+        zero_chunk = mmap(0, KZERO_CHUNK_SIZE, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANON, -1, 0);
+        if(zero_chunk == MAP_FAILED)
+            die();
+        if(mlock(zero_chunk, KZERO_CHUNK_SIZE))
+            die();
+    }
+    return zero_chunk;
+}
+
 static void kmemzero(void* dst, size_t sz)
 {
-    char* umem = mmap(0, sz, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANON, -1, 0);
-    mlock(umem, sz);
-    kmemcpy(dst, umem, sz);
-    munmap(umem, sz);
+    const char* zero_chunk = get_zero_chunk();
+    while(sz)
+    {
+        size_t chunk = sz;
+        if(chunk > KZERO_CHUNK_SIZE)
+            chunk = KZERO_CHUNK_SIZE;
+        kmemcpy(dst, zero_chunk, chunk);
+        dst = (char*)dst + chunk;
+        sz -= chunk;
+    }
 }
 
 static int strcmp(const char* a, const char* b)
