@@ -6,7 +6,9 @@
 #include "log.h"
 #include "fpu.h"
 
-#include "../libtomcrypt/src/headers/tomcrypt.h"
+#include "../BearSSL/inc/bearssl.h"
+#include <isa-l_crypto/aes_cbc.h>
+#include <isa-l_crypto/aes_keyexp.h>
 
 // #define NPDRM_PORTING 1
 
@@ -20,18 +22,16 @@ static const uint8_t rif_debug_key[] = {0x96, 0xC2, 0x26, 0x8D, 0x69, 0x26, 0x1C
 
 int aes_cbc_128_decrypt(uint8_t *out, const uint8_t *in, int size, const uint8_t *key, const uint8_t *iv)
 {
+    enum { AES128_EXPKEY_SIZE = 16 * 11 };
+    uint8_t enc_exp_key[AES128_EXPKEY_SIZE] __attribute__((aligned(16)));
+    uint8_t dec_exp_key[AES128_EXPKEY_SIZE] __attribute__((aligned(16)));
     int err = -1;
-    static int aes_cipher = -1;
     uelf_fpu_enter();
-    if (aes_cipher < 0)
-    {
-        if ((aes_cipher = register_cipher(&aes_desc)) < 0) goto exit;
-    }
-
-    symmetric_CBC cbc;
-    if ((err = cbc_start(aes_cipher, iv, key, 16, 0, &cbc)) != CRYPT_OK) goto exit;
-    if ((err = cbc_decrypt(in, out, size, &cbc)) != CRYPT_OK) goto exit;
-    if ((err = cbc_done(&cbc)) != CRYPT_OK) goto exit;
+    if (isal_aes_keyexp_128(key, enc_exp_key, dec_exp_key))
+        goto exit;
+    if (isal_aes_cbc_dec_128(in, iv, dec_exp_key, out, size))
+        goto exit;
+    err = 0;
 exit:
     uelf_fpu_exit();
     return err;
@@ -39,13 +39,14 @@ exit:
 
 int sha256_buffer(const unsigned char *in, unsigned long inlen, unsigned char *out)
 {
-    hash_state md;
+    br_sha256_context ctx;
     int err = -1;
 
     uelf_fpu_enter();
-    if ((err = sha256_init(&md)) != CRYPT_OK) goto exit;
-    if ((err = sha256_process(&md, in, inlen)) != CRYPT_OK) goto exit;
-    if ((err = sha256_done(&md, out)) != CRYPT_OK) goto exit;
+    br_sha256_init(&ctx);
+    br_sha256_update(&ctx, in, inlen);
+    br_sha256_out(&ctx, out);
+    err = 0;
 exit:
     uelf_fpu_exit();
     return err;
