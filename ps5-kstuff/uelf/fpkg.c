@@ -286,6 +286,8 @@ int try_handle_fpkg_mailbox(uint64_t* regs, uint64_t lr)
                     uint32_t fake_resp[4] = {0, 0, IDX_TO_HANDLE(key1), IDX_TO_HANDLE(key2)};
                     copy_to_kernel(regs[RDX], fake_resp, sizeof(fake_resp));
                 }
+                else
+                    unregister_fake_key(key1);
             }
         }
     }
