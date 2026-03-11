@@ -2,9 +2,11 @@
 #include <sys/types.h>
 #include <sys/mman.h>
 #include <sys/sysctl.h>
+#include <sys/user.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdarg.h>
+#include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -265,6 +267,28 @@ uint64_t virt2phys(uintptr_t addr, uint64_t* phys_limit, uint64_t dmap, uint64_t
     //unreachable
 }
 
+static uint64_t virt2phys_or_die(uintptr_t addr, uint64_t* phys_limit, uint64_t dmap, uint64_t pml)
+{
+    uint64_t phys = virt2phys(addr, phys_limit, dmap, pml);
+    if(phys == (uint64_t)-1)
+        die();
+    return phys;
+}
+
+static void build_uelf_pml1(uint64_t pml1_virt, uint64_t user_start, uint64_t user_end, uint64_t dmap, uint64_t cr3)
+{
+    uint64_t phys = 0;
+    uint64_t phys_end = 0;
+    uint64_t vaddr = user_start;
+    for(uint64_t i = 0; vaddr < user_end; i++, vaddr += 4096)
+    {
+        if(vaddr >= phys_end)
+            phys = virt2phys_or_die(vaddr, &phys_end, dmap, cr3);
+        copyin(pml1_virt+8*i, &(uint64_t[1]){phys | 7}, 8);
+        phys += 4096;
+    }
+}
+
 uint64_t kernel_get_proc(uint64_t pid)
 {
     uint64_t proc = kread8(offsets.allproc);
@@ -320,11 +344,9 @@ uint64_t find_empty_pml4_index(int idx)
             return i;
 }
 
-void build_uelf_cr3(uint64_t uelf_cr3, void* uelf_base[2], uint64_t uelf_virt_base, uint64_t dmap_virt_base)
+void build_uelf_cr3(uint64_t uelf_cr3, void* uelf_base[2], uint64_t uelf_virt_base, uint64_t dmap_virt_base, uint64_t dmap, uint64_t cr3)
 {
     static char zeros[4096];
-    uint64_t dmap = get_dmap_base();
-    uint64_t cr3 = r0gdb_read_cr3();
     uint64_t user_start = (uint64_t)uelf_base[0];
     uint64_t user_end = (uint64_t)uelf_base[1];
     if((uelf_virt_base & 0x1fffff) || (dmap_virt_base & ((1ull << 39) - 1)) || user_end - user_start > 0x200000)
@@ -334,34 +356,53 @@ void build_uelf_cr3(uint64_t uelf_cr3, void* uelf_base[2], uint64_t uelf_virt_ba
     kmemcpy((void*)(pml4_virt+2048), (void*)(dmap+cr3+2048), 2048);
     uint64_t pml3_virt = uelf_cr3 + 4096;
     uint64_t pml3_dmap = uelf_cr3 + 16384; //user-accessible direct mapping of physical memory
-    copyin(pml4_virt + 8 * ((uelf_virt_base >> 39) & 511), &(uint64_t[1]){virt2phys(pml3_virt,0,0,0) | 7}, 8);
-    copyin(pml4_virt + 8 * ((dmap_virt_base >> 39) & 511), &(uint64_t[1]){virt2phys(pml3_dmap,0,0,0) | 7}, 8);
+    copyin(pml4_virt + 8 * ((uelf_virt_base >> 39) & 511), &(uint64_t[1]){virt2phys_or_die(pml3_virt, 0, dmap, cr3) | 7}, 8);
+    copyin(pml4_virt + 8 * ((dmap_virt_base >> 39) & 511), &(uint64_t[1]){virt2phys_or_die(pml3_dmap, 0, dmap, cr3) | 7}, 8);
     copyin(pml3_virt, zeros, 4096);
     uint64_t pml2_virt = uelf_cr3 + 8192;
-    copyin(pml3_virt + 8 * ((uelf_virt_base >> 30) & 511), &(uint64_t[1]){virt2phys(pml2_virt,0,0,0) | 7}, 8);
+    copyin(pml3_virt + 8 * ((uelf_virt_base >> 30) & 511), &(uint64_t[1]){virt2phys_or_die(pml2_virt, 0, dmap, cr3) | 7}, 8);
     copyin(pml2_virt, zeros, 4096);
     uint64_t pml1_virt = uelf_cr3 + 12288;
-    copyin(pml2_virt + 8 * ((uelf_virt_base >> 21) & 511), &(uint64_t[1]){virt2phys(pml1_virt,0,0,0) | 7}, 8);
+    copyin(pml2_virt + 8 * ((uelf_virt_base >> 21) & 511), &(uint64_t[1]){virt2phys_or_die(pml1_virt, 0, dmap, cr3) | 7}, 8);
     copyin(pml1_virt, zeros, 4096);
-    for(uint64_t i = 0; i * 4096 + user_start < user_end; i++)
-        copyin(pml1_virt+8*i, &(uint64_t[1]){virt2phys(i*4096+user_start,0,0,0) | 7}, 8);
+    build_uelf_pml1(pml1_virt, user_start, user_end, dmap, cr3);
     for(uint64_t i = 0; i < 512; i++)
         copyin(pml3_dmap+8*i, &(uint64_t[1]){(i<<30) | 135}, 8);
 }
 
 int find_proc(const char* name)
 {
-    for(int pid = 1; pid < 1024; pid++)
+    enum { PROC_LIST_RETRIES = 4, PROC_LIST_SLACK = 16 };
+    int key[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PROC, 0};
+    for(int attempt = 0; attempt < PROC_LIST_RETRIES; attempt++)
     {
-        size_t sz = 1096;
-        int key[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, pid};
-        char buf[1097] = {0};
-        sysctl(key, 4, buf, &sz, 0, 0);
-        const char* a = buf + 447;
-        const char* b = name;
-        while(*a && *a++ == *b++);
-        if(!*a && !*b)
-            return pid;
+        size_t sz = 0;
+        if(sysctl(key, 4, 0, &sz, 0, 0))
+            return -1;
+        if(sz > (size_t)-1 - PROC_LIST_SLACK * sizeof(struct kinfo_proc))
+            return -1;
+        size_t alloc_sz = sz + PROC_LIST_SLACK * sizeof(struct kinfo_proc);
+        struct kinfo_proc* proc_list = mmap(0, alloc_sz, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANON, -1, 0);
+        if(proc_list == MAP_FAILED)
+            return -1;
+        size_t out_sz = alloc_sz;
+        if(!sysctl(key, 4, proc_list, &out_sz, 0, 0))
+        {
+            size_t count = out_sz / sizeof(*proc_list);
+            for(size_t i = 0; i < count; i++)
+                if(!strcmp(proc_list[i].ki_comm, name))
+                {
+                    int pid = proc_list[i].ki_pid;
+                    munmap(proc_list, alloc_sz);
+                    return pid;
+                }
+            munmap(proc_list, alloc_sz);
+            return -1;
+        }
+        int saved_errno = errno;
+        munmap(proc_list, alloc_sz);
+        if(saved_errno != ENOMEM)
+            return -1;
     }
     return -1;
 }
@@ -716,9 +757,11 @@ int main(void* ds, int a, int b, uintptr_t c, uintptr_t d)
     else
         shared_area = comparison_table + 65536;
     kmemzero((void*)shared_area, 4096);
+    uint64_t kernel_dmap = get_dmap_base();
+    uint64_t kernel_cr3 = r0gdb_read_cr3();
     uint64_t uelf_virt_base = (find_empty_pml4_index(0) << 39) | (-1ull << 48);
     uint64_t dmem_virt_base = (find_empty_pml4_index(1) << 39) | (-1ull << 48);
-    shared_area = virt2phys(shared_area,0,0,0) + dmem_virt_base;
+    shared_area = virt2phys_or_die(shared_area, 0, kernel_dmap, kernel_cr3) + dmem_virt_base;
 
     volatile int zero = 0; //hack to force runtime calculation of string pointers
     const char* symbols[] = {
@@ -805,12 +848,12 @@ int main(void* ds, int a, int b, uintptr_t c, uintptr_t d)
         uintptr_t uelf_cr3 = (uintptr_t)kmalloc(24576);
         uelf_cr3 = ((uelf_cr3 + 4095) | 4095) - 4095;
         uelf_cr3s[cpu] = uelf_cr3;
-        values[uelf_cr3_idx] = virt2phys(uelf_cr3,0,0,0);
+        values[uelf_cr3_idx] = virt2phys_or_die(uelf_cr3, 0, kernel_dmap, kernel_cr3);
         values[uelf_entry_idx] = (uintptr_t)uelf_entry - (uintptr_t)uelf_base[0] + uelf_virt_base;
         void* entry = 0;
         void* base[2] = {0};
         char* kelf = load_kelf(kek, symbols, values, base, &entry, 0);
-        build_uelf_cr3(uelf_cr3, uelf_base, uelf_virt_base, dmem_virt_base);
+        build_uelf_cr3(uelf_cr3, uelf_base, uelf_virt_base, dmem_virt_base, kernel_dmap, kernel_cr3);
         uelf_bases[cpu] = (uintptr_t)uelf;
         kelf_bases[cpu] = (uint64_t)kelf;
         kelf_entries[cpu] = (uint64_t)entry;
