@@ -82,9 +82,43 @@ static int strcmp(const char* a, const char* b)
 #define kmalloc my_kmalloc
 
 static uint64_t mem_blocks[8];
+enum { KMALLOC_CHUNK_SIZE = 1 << 22 };
+
+static size_t align_up(size_t value, size_t alignment)
+{
+    return (value + alignment - 1) & ~(alignment - 1);
+}
+
+static void kmalloc_add_block(size_t min_size)
+{
+    size_t block_size = align_up(min_size, 4096);
+    if(block_size < KMALLOC_CHUNK_SIZE)
+        block_size = KMALLOC_CHUNK_SIZE;
+    for(int i = 0; i < 8; i += 2)
+    {
+        if(mem_blocks[i] || mem_blocks[i+1])
+            continue;
+        while(!mem_blocks[i])
+            mem_blocks[i] = r0gdb_kmalloc(block_size);
+        mem_blocks[i+1] = mem_blocks[i] + block_size;
+        return;
+    }
+    die();
+}
 
 static void* kmalloc(size_t sz)
 {
+    sz = align_up(sz, 16);
+    for(int i = 0; i < 8; i += 2)
+    {
+        if(mem_blocks[i] + sz <= mem_blocks[i+1])
+        {
+            uint64_t ans = mem_blocks[i];
+            mem_blocks[i] += sz;
+            return (void*)ans;
+        }
+    }
+    kmalloc_add_block(sz);
     for(int i = 0; i < 8; i += 2)
     {
         if(mem_blocks[i] + sz <= mem_blocks[i+1])
@@ -713,12 +747,7 @@ int main(void* ds, int a, int b, uintptr_t c, uintptr_t d)
     gdb_remote_syscall("write", 3, 0, (uintptr_t)1, (uintptr_t)"allocating kernel memory... ", (uintptr_t)28);
     for(int i = 0; i < 0x300; i += 2)
         r0gdb_kmalloc(0x100);
-    for(int i = 0; i < 2; i += 2)
-    {
-        while(!mem_blocks[i])
-            mem_blocks[i] = r0gdb_kmalloc(1<<23);
-        mem_blocks[i+1] = (mem_blocks[i] ? mem_blocks[i] + (1<<23) : 0);
-    }
+    kmalloc_add_block(KMALLOC_CHUNK_SIZE);
     gdb_remote_syscall("write", 3, 0, (uintptr_t)1, (uintptr_t)"done\n", (uintptr_t)5);
     uint64_t comparison_table_base = (uint64_t)kmalloc(131072);
     uint64_t comparison_table = ((comparison_table_base - 1) | 65535) + 1;
