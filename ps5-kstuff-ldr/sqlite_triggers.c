@@ -84,7 +84,6 @@ void run_stmt(sqlite3* db, const char* cmd, struct buf* buf)
 int patch_app_db(void)
 {
     struct buf buf = {};
-    char* errmsg;
     sqlite3* db;
     char* cmd;
 

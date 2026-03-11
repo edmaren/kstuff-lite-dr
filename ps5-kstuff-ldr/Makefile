@@ -1,3 +1,5 @@
+LOADER_OPT ?= -O2
+
 #   Copyright (C) 2025 John Törnblom
 #
 # This file is free software; you can redistribute it and/or modify it
@@ -23,16 +25,18 @@ else
     $(error PS5_PAYLOAD_SDK is undefined)
 endif
 
-CFLAGS := -Wall -Werror
+CFLAGS += -Wall -Werror
 
 all: kstuff.elf
 
-payload_bin.c: ../ps5-kstuff/payload.bin 
-	make -C ../ps5-kstuff/
+../ps5-kstuff/payload.bin:
+	$(MAKE) -C ../ps5-kstuff/
+
+payload_bin.c: ../ps5-kstuff/payload.bin
 	xxd -i $^ > $@
 
 kstuff.elf: payload_bin.c main.c sqlite_triggers.c
-	$(CC) -o $@ main.c sqlite_triggers.c -lsqlite3
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LOADER_OPT) $(LDFLAGS) -o $@ main.c sqlite_triggers.c -lsqlite3
 	strip $@
 	
 clean:

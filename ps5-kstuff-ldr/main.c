@@ -203,7 +203,6 @@ int main(void) {
 	sceKernelSetProcessName("kstuff.elf");
     Elf64_Ehdr *ehdr = (Elf64_Ehdr*)___ps5_kstuff_payload_bin;
     Elf64_Phdr *phdr = (Elf64_Phdr*)(___ps5_kstuff_payload_bin + ehdr->e_phoff);
-    Elf64_Shdr *shdr = (Elf64_Shdr*)(___ps5_kstuff_payload_bin + ehdr->e_shoff);
     void *base = (void*)0x0000000926100000;
     uintptr_t min_vaddr = -1;
     uintptr_t max_vaddr = 0;
