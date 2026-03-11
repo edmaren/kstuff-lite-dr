@@ -50,7 +50,7 @@ static int handle_crypto_message(uint64_t* regs, uint64_t msg, uint64_t bytes_ca
         //log_word(0xdead0006dead0007);
         uint8_t hash[32] = {0};
         *bytes_handled += msg_data[1];
-        if(bytes_cap < *bytes_handled && pfs_hmac_virtual(hash, key, msg_data[2], msg_data[1]))
+        if(bytes_cap < *bytes_handled && pfs_hmac_virtual(hash, idx, key, msg_data[2], msg_data[1]))
 		 
 										   
             return -1;

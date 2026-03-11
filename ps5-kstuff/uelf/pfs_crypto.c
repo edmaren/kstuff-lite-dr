@@ -12,6 +12,9 @@
 
 enum {
     AES128_EXPKEY_SIZE = 16 * 11,
+    HMAC_SHA256_CACHE_SIZE = 8,
+    HMAC_SHA256_BLOCK_SIZE = 64,
+    HMAC_SHA256_DIGEST_SIZE = 32,
     XTS_KEY_CACHE_SIZE = 8,
 };
 
@@ -27,6 +30,17 @@ struct xts_key_cache_entry
 };
 
 static struct xts_key_cache_entry xts_key_cache[XTS_KEY_CACHE_SIZE];
+
+struct hmac_sha256_cache_entry
+{
+    int key_id;
+    uint8_t raw_key[32];
+    br_sha256_context inner_ctx;
+    br_sha256_context outer_ctx;
+    int valid;
+};
+
+static struct hmac_sha256_cache_entry hmac_sha256_cache[HMAC_SHA256_CACHE_SIZE];
 
 struct virt2phys_local_cache
 {
@@ -62,15 +76,74 @@ static int virt2phys_local(struct virt2phys_local_cache* cache, uint64_t addr, u
     return 1;
 }
 
+static void hmac_sha256_seed(br_sha256_context* inner_ctx, br_sha256_context* outer_ctx,
+                             const uint8_t key[32])
+{
+    uint8_t pad[HMAC_SHA256_BLOCK_SIZE];
+    memset(pad, 0x36, sizeof(pad));
+    for(size_t i = 0; i < 32; i++)
+        pad[i] ^= key[i];
+    br_sha256_init(inner_ctx);
+    br_sha256_update(inner_ctx, pad, sizeof(pad));
+
+    memset(pad, 0x5c, sizeof(pad));
+    for(size_t i = 0; i < 32; i++)
+        pad[i] ^= key[i];
+    br_sha256_init(outer_ctx);
+    br_sha256_update(outer_ctx, pad, sizeof(pad));
+}
+
+static void hmac_sha256_finalize(const br_sha256_context* inner_seed, const br_sha256_context* outer_seed,
+                                 br_sha256_context* inner_ctx, uint8_t out[HMAC_SHA256_DIGEST_SIZE])
+{
+    uint8_t inner_hash[HMAC_SHA256_DIGEST_SIZE];
+    br_sha256_out(inner_ctx, inner_hash);
+    *inner_ctx = *outer_seed;
+    br_sha256_update(inner_ctx, inner_hash, sizeof(inner_hash));
+    br_sha256_out(inner_ctx, out);
+    *inner_ctx = *inner_seed;
+}
+
+static void hmac_sha256_once(uint8_t out[HMAC_SHA256_DIGEST_SIZE], const uint8_t key[32],
+                             const void* part1, size_t part1_len, const void* part2, size_t part2_len)
+{
+    br_sha256_context inner_ctx, outer_ctx, ctx;
+    hmac_sha256_seed(&inner_ctx, &outer_ctx, key);
+    ctx = inner_ctx;
+    if(part1_len)
+        br_sha256_update(&ctx, part1, part1_len);
+    if(part2_len)
+        br_sha256_update(&ctx, part2, part2_len);
+    hmac_sha256_finalize(&inner_ctx, &outer_ctx, &ctx, out);
+}
+
+static int get_hmac_sha256_cache_entry(int key_id, const uint8_t* key,
+                                       const struct hmac_sha256_cache_entry** out)
+{
+    struct hmac_sha256_cache_entry* entry =
+        &hmac_sha256_cache[((unsigned)key_id) & (HMAC_SHA256_CACHE_SIZE - 1)];
+    if(__atomic_load_n(&entry->valid, __ATOMIC_ACQUIRE)
+    && entry->key_id == key_id
+    && !memcmp(entry->raw_key, key, sizeof(entry->raw_key)))
+    {
+        *out = entry;
+        return 0;
+    }
+
+    struct hmac_sha256_cache_entry temp = {.key_id = key_id};
+    memcpy(temp.raw_key, key, sizeof(temp.raw_key));
+    hmac_sha256_seed(&temp.inner_ctx, &temp.outer_ctx, temp.raw_key);
+
+    __atomic_store_n(&entry->valid, 0, __ATOMIC_RELAXED);
+    memcpy(entry, &temp, sizeof(temp));
+    __atomic_store_n(&entry->valid, 1, __ATOMIC_RELEASE);
+    *out = entry;
+    return 0;
+}
+
 static void pfs_gen_key(uint32_t idx, const uint8_t* seed, const uint8_t* ekpfs, uint8_t* out)
 {
-    br_hmac_key_context key_ctx;
-    br_hmac_key_init(&key_ctx, &br_sha256_vtable, ekpfs, 32);
-    br_hmac_context ctx;
-    br_hmac_init(&ctx, &key_ctx, 0);
-    br_hmac_update(&ctx, &idx, sizeof(idx));
-    br_hmac_update(&ctx, seed, 16);
-    br_hmac_out(&ctx, out);
+    hmac_sha256_once(out, ekpfs, &idx, sizeof(idx), seed, 16);
 }
 
 int pfs_derive_fake_keys(const uint8_t* p_eekpfs, const uint8_t* crypt_seed, uint8_t* ek, uint8_t* sk)
@@ -97,14 +170,18 @@ exit:
     return ans;
 }
 
-int pfs_hmac_virtual(uint8_t* out, const uint8_t* key, uint64_t data, size_t data_size)
+int pfs_hmac_virtual(uint8_t* out, int key_id, const uint8_t* key, uint64_t data, size_t data_size)
 {
     struct virt2phys_local_cache data_cache = {0};
+    br_sha256_context ctx;
     uelf_fpu_enter();
-    br_hmac_key_context key_ctx;
-    br_hmac_key_init(&key_ctx, &br_sha256_vtable, key, 32);
-    br_hmac_context ctx;
-    br_hmac_init(&ctx, &key_ctx, 0);
+    const struct hmac_sha256_cache_entry* hmac_keys;
+    if(get_hmac_sha256_cache_entry(key_id, key, &hmac_keys))
+    {
+        uelf_fpu_exit();
+        return -1;
+    }
+    ctx = hmac_keys->inner_ctx;
     while(data_size)
     {
         uint64_t chunk_cur;
@@ -117,11 +194,11 @@ int pfs_hmac_virtual(uint8_t* out, const uint8_t* key, uint64_t data, size_t dat
         size_t chk = chunk_end - chunk_cur;
         if(chk > data_size)
             chk = data_size;
-        br_hmac_update(&ctx, DMEM+chunk_cur, chk);
+        br_sha256_update(&ctx, DMEM+chunk_cur, chk);
         data += chk;
         data_size -= chk;
     }
-    br_hmac_out(&ctx, out);
+    hmac_sha256_finalize(&hmac_keys->inner_ctx, &hmac_keys->outer_ctx, &ctx, out);
     uelf_fpu_exit();
     return 0;
 }
