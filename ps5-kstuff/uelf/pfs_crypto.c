@@ -49,56 +49,66 @@ static int virt2phys_local(struct virt2phys_local_cache* cache, uint64_t addr, u
     return 1;
 }
 
-static void hmac_sha256_seed(br_sha256_context* inner_ctx, br_sha256_context* outer_ctx,
-                             const uint8_t key[32])
+static int hmac_sha256_seed(struct uelf_sha256_context* inner_ctx, struct uelf_sha256_context* outer_ctx,
+                            const uint8_t key[32])
 {
     uint8_t pad[HMAC_SHA256_BLOCK_SIZE];
     memset(pad, 0x36, sizeof(pad));
     for(size_t i = 0; i < 32; i++)
         pad[i] ^= key[i];
-    br_sha256_init(inner_ctx);
-    br_sha256_update(inner_ctx, pad, sizeof(pad));
+    uelf_sha256_init(inner_ctx);
+    if(uelf_sha256_update(inner_ctx, pad, sizeof(pad)))
+        return -1;
 
     memset(pad, 0x5c, sizeof(pad));
     for(size_t i = 0; i < 32; i++)
         pad[i] ^= key[i];
-    br_sha256_init(outer_ctx);
-    br_sha256_update(outer_ctx, pad, sizeof(pad));
+    uelf_sha256_init(outer_ctx);
+    if(uelf_sha256_update(outer_ctx, pad, sizeof(pad)))
+        return -1;
+    return 0;
 }
 
-static void hmac_sha256_finalize(const br_sha256_context* inner_seed, const br_sha256_context* outer_seed,
-                                 br_sha256_context* inner_ctx, uint8_t out[HMAC_SHA256_DIGEST_SIZE])
+static int hmac_sha256_finalize(const struct uelf_sha256_context* inner_seed,
+                                const struct uelf_sha256_context* outer_seed,
+                                struct uelf_sha256_context* inner_ctx,
+                                uint8_t out[HMAC_SHA256_DIGEST_SIZE])
 {
     uint8_t inner_hash[HMAC_SHA256_DIGEST_SIZE];
-    br_sha256_out(inner_ctx, inner_hash);
+    if(uelf_sha256_out(inner_ctx, inner_hash))
+        return -1;
     *inner_ctx = *outer_seed;
-    br_sha256_update(inner_ctx, inner_hash, sizeof(inner_hash));
-    br_sha256_out(inner_ctx, out);
+    if(uelf_sha256_update(inner_ctx, inner_hash, sizeof(inner_hash)))
+        return -1;
+    if(uelf_sha256_out(inner_ctx, out))
+        return -1;
     *inner_ctx = *inner_seed;
+    return 0;
 }
 
-static void hmac_sha256_once(uint8_t out[HMAC_SHA256_DIGEST_SIZE], const uint8_t key[32],
-                             const void* part1, size_t part1_len, const void* part2, size_t part2_len)
+static int hmac_sha256_once(uint8_t out[HMAC_SHA256_DIGEST_SIZE], const uint8_t key[32],
+                            const void* part1, size_t part1_len, const void* part2, size_t part2_len)
 {
-    br_sha256_context inner_ctx, outer_ctx, ctx;
-    hmac_sha256_seed(&inner_ctx, &outer_ctx, key);
+    struct uelf_sha256_context inner_ctx, outer_ctx, ctx;
+    if(hmac_sha256_seed(&inner_ctx, &outer_ctx, key))
+        return -1;
     ctx = inner_ctx;
-    if(part1_len)
-        br_sha256_update(&ctx, part1, part1_len);
-    if(part2_len)
-        br_sha256_update(&ctx, part2, part2_len);
-    hmac_sha256_finalize(&inner_ctx, &outer_ctx, &ctx, out);
+    if(part1_len && uelf_sha256_update(&ctx, part1, part1_len))
+        return -1;
+    if(part2_len && uelf_sha256_update(&ctx, part2, part2_len))
+        return -1;
+    return hmac_sha256_finalize(&inner_ctx, &outer_ctx, &ctx, out);
 }
 
 static struct hmac_sha256_cache_entry* select_hmac_sha256_cache_entry(struct crypto_request_cache* cache,
                                                                       int key_id, const uint8_t* key)
 {
+    (void)key;
     for(size_t i = 0; i < PFS_HMAC_SHA256_CACHE_SLOTS; i++)
     {
         struct hmac_sha256_cache_entry* entry = &cache->hmac[i];
         if(entry->valid
-        && entry->key_id == key_id
-        && !memcmp(entry->raw_key, key, sizeof(entry->raw_key)))
+        && entry->key_id == key_id)
             return entry;
     }
     for(size_t i = 0; i < PFS_HMAC_SHA256_CACHE_SLOTS; i++)
@@ -119,25 +129,24 @@ static int get_hmac_sha256_cache_entry(struct crypto_request_cache* cache, int k
 {
     struct hmac_sha256_cache_entry* entry = select_hmac_sha256_cache_entry(cache, key_id, key);
     if(entry->valid
-    && entry->key_id == key_id
-    && !memcmp(entry->raw_key, key, sizeof(entry->raw_key)))
+    && entry->key_id == key_id)
     {
         *out = entry;
         return 0;
     }
 
     struct hmac_sha256_cache_entry temp = {.key_id = key_id};
-    memcpy(temp.raw_key, key, sizeof(temp.raw_key));
-    hmac_sha256_seed(&temp.inner_ctx, &temp.outer_ctx, temp.raw_key);
+    if(hmac_sha256_seed(&temp.inner_ctx, &temp.outer_ctx, key))
+        return -1;
     temp.valid = 1;
     memcpy(entry, &temp, sizeof(temp));
     *out = entry;
     return 0;
 }
 
-static void pfs_gen_key(uint32_t idx, const uint8_t* seed, const uint8_t* ekpfs, uint8_t* out)
+static int pfs_gen_key(uint32_t idx, const uint8_t* seed, const uint8_t* ekpfs, uint8_t* out)
 {
-    hmac_sha256_once(out, ekpfs, &idx, sizeof(idx), seed, 16);
+    return hmac_sha256_once(out, ekpfs, &idx, sizeof(idx), seed, 16);
 }
 
 int pfs_derive_fake_keys(const uint8_t* p_eekpfs, const uint8_t* crypt_seed, uint8_t* ek, uint8_t* sk)
@@ -156,8 +165,10 @@ int pfs_derive_fake_keys(const uint8_t* p_eekpfs, const uint8_t* crypt_seed, uin
     if(idx != 255 - 32)
         goto exit;
     uint8_t* ekpfs = eekpfs+idx+1;
-    pfs_gen_key(1, crypt_seed, ekpfs, ek);
-    pfs_gen_key(2, crypt_seed, ekpfs, sk);
+    if(pfs_gen_key(1, crypt_seed, ekpfs, ek))
+        goto exit;
+    if(pfs_gen_key(2, crypt_seed, ekpfs, sk))
+        goto exit;
     ans = 1;
 exit:
     uelf_fpu_exit();
@@ -168,7 +179,7 @@ int pfs_hmac_virtual(struct crypto_request_cache* cache, uint8_t* out, int key_i
                      uint64_t data, size_t data_size)
 {
     struct virt2phys_local_cache data_cache = {0};
-    br_sha256_context ctx;
+    struct uelf_sha256_context ctx;
     uelf_fpu_enter();
     const struct hmac_sha256_cache_entry* hmac_keys;
     if(get_hmac_sha256_cache_entry(cache, key_id, key, &hmac_keys))
@@ -189,11 +200,19 @@ int pfs_hmac_virtual(struct crypto_request_cache* cache, uint8_t* out, int key_i
         size_t chk = chunk_end - chunk_cur;
         if(chk > data_size)
             chk = data_size;
-        br_sha256_update(&ctx, DMEM+chunk_cur, chk);
+        if(uelf_sha256_update(&ctx, DMEM+chunk_cur, chk))
+        {
+            uelf_fpu_exit();
+            return -1;
+        }
         data += chk;
         data_size -= chk;
     }
-    hmac_sha256_finalize(&hmac_keys->inner_ctx, &hmac_keys->outer_ctx, &ctx, out);
+    if(hmac_sha256_finalize(&hmac_keys->inner_ctx, &hmac_keys->outer_ctx, &ctx, out))
+    {
+        uelf_fpu_exit();
+        return -1;
+    }
     uelf_fpu_exit();
     return 0;
 }
@@ -201,12 +220,12 @@ int pfs_hmac_virtual(struct crypto_request_cache* cache, uint8_t* out, int key_i
 static struct xts_key_cache_entry* select_xts_key_cache_entry(struct crypto_request_cache* cache, int key_id,
                                                               const uint8_t* key)
 {
+    (void)key;
     for(size_t i = 0; i < PFS_XTS_KEY_CACHE_SLOTS; i++)
     {
         struct xts_key_cache_entry* entry = &cache->xts[i];
         if(entry->valid
-        && entry->key_id == key_id
-        && !memcmp(entry->raw_key, key, sizeof(entry->raw_key)))
+        && entry->key_id == key_id)
             return entry;
     }
     for(size_t i = 0; i < PFS_XTS_KEY_CACHE_SLOTS; i++)
@@ -227,15 +246,13 @@ static int get_xts_key_cache_entry(struct crypto_request_cache* cache, int key_i
 {
     struct xts_key_cache_entry* entry = select_xts_key_cache_entry(cache, key_id, key);
     if(entry->valid
-    && entry->key_id == key_id
-    && !memcmp(entry->raw_key, key, sizeof(entry->raw_key)))
+    && entry->key_id == key_id)
     {
         *out = entry;
         return 0;
     }
 
     struct xts_key_cache_entry temp = {.key_id = key_id};
-    memcpy(temp.raw_key, key, sizeof(temp.raw_key));
     // Preserve the old libtomcrypt key split: key[16..31] encrypts data, key[0..15] encrypts tweaks.
     if(isal_aes_keyexp_128(key + 16, temp.data_key_enc, temp.data_key_dec))
         return -1;

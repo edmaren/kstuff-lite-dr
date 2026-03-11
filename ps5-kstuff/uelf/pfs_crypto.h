@@ -1,7 +1,7 @@
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
-#include "../BearSSL/inc/bearssl_hash.h"
+#include "sha256.h"
 
 enum {
     PFS_AES128_EXPKEY_SIZE = 16 * 11,
@@ -13,7 +13,6 @@ enum {
 struct xts_key_cache_entry
 {
     int key_id;
-    uint8_t raw_key[PFS_CRYPTO_KEY_SIZE];
     uint8_t data_key_enc[PFS_AES128_EXPKEY_SIZE] __attribute__((aligned(16)));
     uint8_t data_key_dec[PFS_AES128_EXPKEY_SIZE] __attribute__((aligned(16)));
     uint8_t tweak_key_enc[PFS_AES128_EXPKEY_SIZE] __attribute__((aligned(16)));
@@ -24,9 +23,8 @@ struct xts_key_cache_entry
 struct hmac_sha256_cache_entry
 {
     int key_id;
-    uint8_t raw_key[PFS_CRYPTO_KEY_SIZE];
-    br_sha256_context inner_ctx;
-    br_sha256_context outer_ctx;
+    struct uelf_sha256_context inner_ctx;
+    struct uelf_sha256_context outer_ctx;
     uint8_t valid;
 };
 
