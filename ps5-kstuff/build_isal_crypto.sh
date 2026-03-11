@@ -31,6 +31,7 @@ asflags=(
   -I"$src_dir/"
   -I"$src_dir/include/"
   -I"$src_dir/aes/"
+  -I"$src_dir/sha256_mb/"
   -I"$src_dir/intel-ipsec-mb/lib/"
 )
 
@@ -45,8 +46,7 @@ compile_asm() {
 mkdir -p "$build_dir"
 rm -f "$lib_path" "$build_dir"/*.o
 
-# Build only the AES-128 entry points used by kstuff and pin them to the AVX
-# backend, which matches the fixed Zen 2-class PS5 target.
+# Build only the AES-128 and Zen 2 pinned SHA-256 entry points used by kstuff.
 compile_c "$wrapper_src" "$build_dir/isa_l_crypto_ps5_minimal.o"
 compile_asm "$src_dir/aes/keyexp_128.asm" "$build_dir/keyexp_128.o"
 compile_asm "$src_dir/aes/cbc_dec_128_x8_avx.asm" "$build_dir/cbc_dec_128_x8_avx.o"
@@ -54,12 +54,17 @@ compile_asm "$src_dir/aes/XTS_AES_128_enc_expanded_key_avx.asm" \
   "$build_dir/XTS_AES_128_enc_expanded_key_avx.o"
 compile_asm "$src_dir/aes/XTS_AES_128_dec_expanded_key_avx.asm" \
   "$build_dir/XTS_AES_128_dec_expanded_key_avx.o"
+compile_asm "$repo_root/isa_l_crypto_ps5_sha256_zen2.asm" \
+  "$build_dir/isa_l_crypto_ps5_sha256_zen2.o"
+compile_asm "$src_dir/sha256_mb/sha256_ni_x1.asm" "$build_dir/sha256_ni_x1.o"
 
 "$AR" crs "$lib_path" \
   "$build_dir/isa_l_crypto_ps5_minimal.o" \
   "$build_dir/keyexp_128.o" \
   "$build_dir/cbc_dec_128_x8_avx.o" \
   "$build_dir/XTS_AES_128_enc_expanded_key_avx.o" \
-  "$build_dir/XTS_AES_128_dec_expanded_key_avx.o"
+  "$build_dir/XTS_AES_128_dec_expanded_key_avx.o" \
+  "$build_dir/isa_l_crypto_ps5_sha256_zen2.o" \
+  "$build_dir/sha256_ni_x1.o"
 
 "$STRIP" -d -R .comment "$lib_path"
