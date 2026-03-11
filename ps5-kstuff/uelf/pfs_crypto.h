@@ -13,6 +13,7 @@ enum {
 struct xts_key_cache_entry
 {
     int key_id;
+    uint8_t key[PFS_CRYPTO_KEY_SIZE];
     uint8_t data_key_enc[PFS_AES128_EXPKEY_SIZE] __attribute__((aligned(16)));
     uint8_t data_key_dec[PFS_AES128_EXPKEY_SIZE] __attribute__((aligned(16)));
     uint8_t tweak_key_enc[PFS_AES128_EXPKEY_SIZE] __attribute__((aligned(16)));
@@ -23,6 +24,7 @@ struct xts_key_cache_entry
 struct hmac_sha256_cache_entry
 {
     int key_id;
+    uint8_t key[PFS_CRYPTO_KEY_SIZE];
     struct uelf_sha256_context inner_ctx;
     struct uelf_sha256_context outer_ctx;
     uint8_t valid;

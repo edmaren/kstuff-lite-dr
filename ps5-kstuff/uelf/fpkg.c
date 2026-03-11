@@ -27,6 +27,8 @@ struct crypto_message_result
     int total_messages;
 };
 
+static struct crypto_request_cache s_crypto_request_cache;
+
 static void crypto_request_emulated(uint64_t* regs, uint64_t msg, uint32_t status)
 {
     uint64_t frame[7] = {
@@ -180,7 +182,6 @@ static int handle_crypto_request(uint64_t* regs, uint64_t bytes_handled)
     int total_status = 0;
     int handled = 0;
     uint64_t new_bytes_handled = 0;
-    struct crypto_request_cache cache = {0};
 
     uint64_t start = (fwver >= 0x800) ? regs[RBX] : regs[R14];
     uelf_fpu_enter();
@@ -195,8 +196,8 @@ static int handle_crypto_request(uint64_t* regs, uint64_t bytes_handled)
         }
 
         struct crypto_message_result result = is_xts_message(msg_data)
-            ? handle_xts_message_run(msg, msg_data, bytes_handled, &new_bytes_handled, &cache)
-            : handle_non_xts_message(msg, msg_data, bytes_handled, &new_bytes_handled, &cache);
+            ? handle_xts_message_run(msg, msg_data, bytes_handled, &new_bytes_handled, &s_crypto_request_cache)
+            : handle_non_xts_message(msg, msg_data, bytes_handled, &new_bytes_handled, &s_crypto_request_cache);
         int status = result.status;
 
         if (status == EINTR) // partial decrypt, need to restart the syscall
