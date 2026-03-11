@@ -5,8 +5,8 @@
 #include "npdrm.h"
 #include "log.h"
 #include "fpu.h"
+#include "sha256.h"
 
-#include "../BearSSL/inc/bearssl.h"
 #include <isa-l_crypto/aes_cbc.h>
 #include <isa-l_crypto/aes_keyexp.h>
 
@@ -39,13 +39,15 @@ exit:
 
 int sha256_buffer(const unsigned char *in, unsigned long inlen, unsigned char *out)
 {
-    br_sha256_context ctx;
+    struct uelf_sha256_context ctx;
     int err = -1;
 
     uelf_fpu_enter();
-    br_sha256_init(&ctx);
-    br_sha256_update(&ctx, in, inlen);
-    br_sha256_out(&ctx, out);
+    uelf_sha256_init(&ctx);
+    if(uelf_sha256_update(&ctx, in, inlen))
+        goto exit;
+    if(uelf_sha256_out(&ctx, out))
+        goto exit;
     err = 0;
 exit:
     uelf_fpu_exit();
