@@ -33,6 +33,14 @@ static struct
     struct fself_header_info info;
 } s_header_cache;
 
+static struct
+{
+    uint64_t ctx;
+    uint64_t header;
+    uint32_t size;
+    int valid;
+} s_context_cache;
+
 static int copy_from_kernel_buffer(void* dst, uint64_t src, uint64_t src_end, uint64_t offset, size_t sz)
 {
     if(src + offset < src || src + offset > src_end)
@@ -104,6 +112,28 @@ static int is_header_fself(uint64_t header, uint32_t size, uint16_t* e_type, int
     return 1;
 }
 
+static void remember_context_fself_info(uint64_t ctx, uint64_t header, uint32_t size)
+{
+    s_context_cache.ctx = ctx;
+    s_context_cache.header = header;
+    s_context_cache.size = size;
+    s_context_cache.valid = 1;
+}
+
+static int get_context_fself_info(uint64_t ctx, uint16_t* e_type, int* is_ps4, uint64_t* authinfo, int* have_authinfo)
+{
+    if(!ctx)
+        return 0;
+    if(!s_context_cache.valid || s_context_cache.ctx != ctx)
+    {
+        uint64_t ctx_data[8];
+        if(copy_from_kernel(ctx_data, ctx, sizeof(ctx_data)))
+            return 0;
+        remember_context_fself_info(ctx, ctx_data[7], (uint32_t)ctx_data[1]);
+    }
+    return is_header_fself(s_context_cache.header, s_context_cache.size, e_type, is_ps4, authinfo, have_authinfo);
+}
+
 extern char doreti_iret[];
 extern char sceSblAuthMgrSmIsLoadable2[];
 extern char sceSblServiceMailbox[];
@@ -161,6 +191,7 @@ static uint64_t dbgregs_for_decryptMultipleSelfBlocks[6] = {
 void handle_fself_syscall(uint64_t* regs)
 {
     s_header_cache.valid = 0;
+    s_context_cache.valid = 0;
 	start_syscall_with_dbgregs(regs, dbgregs_for_fself);
 }
 
@@ -184,9 +215,11 @@ int try_handle_fself_mailbox(uint64_t* regs, uint64_t lr)
 {
     if(lr == (uint64_t)sceSblServiceMailbox_lr_verifyHeader)
     {
-		uint64_t self_header = kpeek64(regs[(fwver >= 0x800) ? RBX : R14] + 56);
+        uint64_t self_context = regs[(fwver >= 0x800) ? RBX : R14];
+		uint64_t self_header = kpeek64(self_context + 56);
 		uint32_t size;
         copy_from_kernel(&size, regs[RDX]+16, 4);
+        remember_context_fself_info(self_context, self_header, size);
         if(is_header_fself(self_header, size, 0, 0, 0, 0))
         {
             char fself_header_backup[(48 + mini_syscore_header_size + 15) & -16];
@@ -205,17 +238,12 @@ int try_handle_fself_mailbox(uint64_t* regs, uint64_t lr)
     }
     else if(lr == (uint64_t)sceSblServiceMailbox_lr_loadSelfSegment)
     {
-        uint64_t ctx[8];
-		copy_from_kernel(
-    		ctx,
-    		(fwver >= 0x1000) ? kpeek64(regs[RBP] - 232) :
-    		(fwver >= 0x900 && fwver <= 0x960) ? regs[R14] :
-    		(fwver >= 0x800 && fwver <= 0x860) ? kpeek64(regs[RBP] - 240) :
-    		regs[RBX],
-    		sizeof(ctx)
-		);
-
-        if(is_header_fself(ctx[7], (uint32_t)ctx[1], 0, 0, 0, 0))
+        uint64_t ctx =
+            (fwver >= 0x1000) ? kpeek64(regs[RBP] - 232) :
+            (fwver >= 0x900 && fwver <= 0x960) ? regs[R14] :
+            (fwver >= 0x800 && fwver <= 0x860) ? kpeek64(regs[RBP] - 240) :
+            regs[RBX];
+        if(get_context_fself_info(ctx, 0, 0, 0, 0))
         {
             pop_stack(regs, &regs[RIP], 8);
             regs[RAX] = 0;
@@ -223,17 +251,12 @@ int try_handle_fself_mailbox(uint64_t* regs, uint64_t lr)
     }
     else if(lr == (uint64_t)sceSblServiceMailbox_lr_decryptSelfBlock)
     {
-        uint64_t ctx[8];
-		copy_from_kernel(
-    		ctx,
-    		(fwver >= 0x800) ? regs[R12] :
-    		(fwver >= 0x500 && fwver <= 0x761) ? kpeek64(regs[RBP] - 192) :
-    		kpeek64(regs[RBP] - sceSblServiceMailbox_decryptSelfBlock_rsp_to_rbp +
-                     		sceSblServiceMailbox_decryptSelfBlock_rsp_to_self_context),
-    		sizeof(ctx)
-		);
-
-        if(is_header_fself(ctx[7], (uint32_t)ctx[1], 0, 0, 0, 0))
+        uint64_t ctx =
+            (fwver >= 0x800) ? regs[R12] :
+            (fwver >= 0x500 && fwver <= 0x761) ? kpeek64(regs[RBP] - 192) :
+            kpeek64(regs[RBP] - sceSblServiceMailbox_decryptSelfBlock_rsp_to_rbp +
+                    sceSblServiceMailbox_decryptSelfBlock_rsp_to_self_context);
+        if(get_context_fself_info(ctx, 0, 0, 0, 0))
         {
             uint64_t request[8];
             copy_from_kernel(request, regs[RDX], sizeof(request));
@@ -244,16 +267,11 @@ int try_handle_fself_mailbox(uint64_t* regs, uint64_t lr)
     }
     else if(lr == (uint64_t)sceSblServiceMailbox_lr_decryptMultipleSelfBlocks)
     {
-        uint64_t ctx[8];
-		copy_from_kernel(
-    		ctx,
-    		(fwver >= 0x600) ? kpeek64(regs[RBP] - 208) :
-    		(fwver >= 0x500 && fwver <= 0x550) ? kpeek64(regs[RBP] - 216) :
-    		regs[R13],
-    		sizeof(ctx)
-		);
-        
-        if(is_header_fself(ctx[7], (uint32_t)ctx[1], 0, 0, 0, 0))
+        uint64_t ctx =
+            (fwver >= 0x600) ? kpeek64(regs[RBP] - 208) :
+            (fwver >= 0x500 && fwver <= 0x550) ? kpeek64(regs[RBP] - 216) :
+            regs[R13];
+        if(get_context_fself_info(ctx, 0, 0, 0, 0))
         {
             uint64_t request[8];
             copy_from_kernel(request, regs[RDX], sizeof(request));
@@ -285,14 +303,11 @@ int try_handle_fself_trap(uint64_t* regs)
 {
     if(regs[RIP] == (uint64_t)sceSblAuthMgrSmIsLoadable2)
     {
-		uint64_t ctx[8];
-        copy_from_kernel(ctx, regs[RDI], sizeof(ctx));
-
         uint16_t e_type;
         int have_authinfo;
         uint64_t authinfo[17];
         int is_ps4;
-        if(is_header_fself(ctx[7], (uint32_t)ctx[1], &e_type, &is_ps4, authinfo, &have_authinfo))
+        if(get_context_fself_info(regs[RDI], &e_type, &is_ps4, authinfo, &have_authinfo))
         {
             uint64_t* p_authinfo;
             if(have_authinfo)
