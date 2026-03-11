@@ -14,6 +14,8 @@ static uint64_t s_auth_info_for_exec[17] = {0x4400001084c2052d, 0x20000380000000
 static uint64_t s_auth_info_for_dynlib_ps4[17] = {0x3100000000000002, 0x0000000000000000, 0x000000000000ff00, 0x0000000000000000, 0x0000000000000000, 0x3000300040000000, 0x4000000000000000, 0x0080000000000000, 0xf0000000ffff4000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000};
 static uint64_t s_auth_info_for_exec_ps4[17] = {0x3100000000000001, 0x2000038000000000, 0x000000000000ff00, 0x0000000000000000, 0x0000000000000000, 0x4000400040000000, 0x4000000000000000, 0x0080000000000002, 0xf0000000ffff4000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000};
 
+enum { SELF_BLOCK_SIZE = 16384 };
+
 struct fself_header_info
 {
     int is_fself;
@@ -258,8 +260,17 @@ int try_handle_fself_mailbox(uint64_t* regs, uint64_t lr)
             uint64_t* src = (uint64_t*)(DMEM + request[1]);
             uint64_t* dst = (uint64_t*)(DMEM + request[2]);
             uint32_t count = request[5];
-            for(uint32_t i = 0; i < count; i++)
-                memcpy(DMEM+dst[i], DMEM+src[i], 16384);
+            for(uint32_t i = 0; i < count;)
+            {
+                uint64_t run_src = src[i];
+                uint64_t run_dst = dst[i];
+                size_t run_size = SELF_BLOCK_SIZE;
+                while(++i < count
+                   && src[i] == run_src + run_size
+                   && dst[i] == run_dst + run_size)
+                    run_size += SELF_BLOCK_SIZE;
+                memcpy(DMEM + run_dst, DMEM + run_src, run_size);
+            }
             pop_stack(regs, &regs[RIP], 8);
             regs[RAX] = 0;
         }
