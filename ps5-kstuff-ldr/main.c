@@ -70,6 +70,10 @@ static int mount_nullfs(const char* src, const char* dst) {
     return nmount(iov, IOVEC_SIZE(iov), 0);
 }
 
+static int automount_disabled(void) {
+    return access("/data/.kstuff_noautomount", F_OK) == 0;
+}
+
 static int bind_mount_title(const char* title_id, const char* src) {
     char dst[PATH_MAX];
     struct stat st;
@@ -254,6 +258,11 @@ int main(void) {
     if(*args->payloadout == 0) {
         puts("patching app.db");
         *args->payloadout = patch_app_db();
+    }
+
+    if (automount_disabled()) {
+        klog_printf("Automount disabled by /data/.kstuff_noautomount\n");
+        return 0;
     }
 
     klog_printf("Remounting /system_ex and mounting titles...\n");
