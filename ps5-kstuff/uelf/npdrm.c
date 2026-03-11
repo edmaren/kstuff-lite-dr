@@ -20,16 +20,27 @@ extern char sceSblServiceMailbox[];
 
 static const uint8_t rif_debug_key[] = {0x96, 0xC2, 0x26, 0x8D, 0x69, 0x26, 0x1C, 0x8B, 0x1E, 0x3B, 0x6B, 0xFF, 0x2F, 0xE0, 0x4E, 0x12};
 
-int aes_cbc_128_decrypt(uint8_t *out, const uint8_t *in, int size, const uint8_t *key, const uint8_t *iv)
+enum { AES128_EXPKEY_SIZE = 16 * 11 };
+
+static struct
 {
-    enum { AES128_EXPKEY_SIZE = 16 * 11 };
     uint8_t enc_exp_key[AES128_EXPKEY_SIZE] __attribute__((aligned(16)));
     uint8_t dec_exp_key[AES128_EXPKEY_SIZE] __attribute__((aligned(16)));
+    int valid;
+} s_rif_debug_key_schedule;
+
+static int aes_cbc_128_decrypt_rif_debug(uint8_t *out, const uint8_t *in, int size, const uint8_t *iv)
+{
     int err = -1;
     uelf_fpu_enter();
-    if (isal_aes_keyexp_128(key, enc_exp_key, dec_exp_key))
-        goto exit;
-    if (isal_aes_cbc_dec_128(in, iv, dec_exp_key, out, size))
+    if (!s_rif_debug_key_schedule.valid)
+    {
+        if (isal_aes_keyexp_128(rif_debug_key, s_rif_debug_key_schedule.enc_exp_key,
+                                s_rif_debug_key_schedule.dec_exp_key))
+            goto exit;
+        s_rif_debug_key_schedule.valid = 1;
+    }
+    if (isal_aes_cbc_dec_128(in, iv, s_rif_debug_key_schedule.dec_exp_key, out, size))
         goto exit;
     err = 0;
 exit:
@@ -165,13 +176,14 @@ int try_handle_npdrm_mailbox(uint64_t *regs, uint64_t lr)
 #else
     if (lr == (uint64_t)sceSblServiceMailbox_lr_npdrm_cmd_6)
 #endif
-    {
-        uint8_t decrypted_secret[sizeof(layout.rif.rifSecret)];
-        if (aes_cbc_128_decrypt(decrypted_secret, layout.rif.rifSecret, sizeof(layout.rif.rifSecret), rif_debug_key, layout.rif.rifIv))
         {
-            uelf_fpu_exit();
-            return 1;
-        }
+            uint8_t decrypted_secret[sizeof(layout.rif.rifSecret)];
+            if (aes_cbc_128_decrypt_rif_debug(decrypted_secret, layout.rif.rifSecret,
+                                              sizeof(layout.rif.rifSecret), layout.rif.rifIv))
+            {
+                uelf_fpu_exit();
+                return 1;
+            }
 
         if (memcmp(contentid_hash + 16, decrypted_secret, 16) != 0)
         {
