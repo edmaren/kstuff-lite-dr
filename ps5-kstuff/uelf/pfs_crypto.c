@@ -11,36 +11,9 @@
 #include <isa-l_crypto/aes_xts.h>
 
 enum {
-    AES128_EXPKEY_SIZE = 16 * 11,
-    HMAC_SHA256_CACHE_SIZE = 8,
     HMAC_SHA256_BLOCK_SIZE = 64,
     HMAC_SHA256_DIGEST_SIZE = 32,
-    XTS_KEY_CACHE_SIZE = 8,
 };
-
-struct xts_key_cache_entry
-{
-    int key_id;
-    uint8_t raw_key[32];
-    uint8_t data_key_enc[AES128_EXPKEY_SIZE] __attribute__((aligned(16)));
-    uint8_t data_key_dec[AES128_EXPKEY_SIZE] __attribute__((aligned(16)));
-    uint8_t tweak_key_enc[AES128_EXPKEY_SIZE] __attribute__((aligned(16)));
-    uint8_t tweak_key_dec[AES128_EXPKEY_SIZE] __attribute__((aligned(16)));
-    int valid;
-};
-
-static struct xts_key_cache_entry xts_key_cache[XTS_KEY_CACHE_SIZE];
-
-struct hmac_sha256_cache_entry
-{
-    int key_id;
-    uint8_t raw_key[32];
-    br_sha256_context inner_ctx;
-    br_sha256_context outer_ctx;
-    int valid;
-};
-
-static struct hmac_sha256_cache_entry hmac_sha256_cache[HMAC_SHA256_CACHE_SIZE];
 
 struct virt2phys_local_cache
 {
@@ -117,12 +90,35 @@ static void hmac_sha256_once(uint8_t out[HMAC_SHA256_DIGEST_SIZE], const uint8_t
     hmac_sha256_finalize(&inner_ctx, &outer_ctx, &ctx, out);
 }
 
-static int get_hmac_sha256_cache_entry(int key_id, const uint8_t* key,
+static struct hmac_sha256_cache_entry* select_hmac_sha256_cache_entry(struct crypto_request_cache* cache,
+                                                                      int key_id, const uint8_t* key)
+{
+    for(size_t i = 0; i < PFS_HMAC_SHA256_CACHE_SLOTS; i++)
+    {
+        struct hmac_sha256_cache_entry* entry = &cache->hmac[i];
+        if(entry->valid
+        && entry->key_id == key_id
+        && !memcmp(entry->raw_key, key, sizeof(entry->raw_key)))
+            return entry;
+    }
+    for(size_t i = 0; i < PFS_HMAC_SHA256_CACHE_SLOTS; i++)
+    {
+        struct hmac_sha256_cache_entry* entry = &cache->hmac[i];
+        if(!entry->valid)
+            return entry;
+    }
+    struct hmac_sha256_cache_entry* entry = &cache->hmac[cache->hmac_next_slot];
+    cache->hmac_next_slot++;
+    if(cache->hmac_next_slot == PFS_HMAC_SHA256_CACHE_SLOTS)
+        cache->hmac_next_slot = 0;
+    return entry;
+}
+
+static int get_hmac_sha256_cache_entry(struct crypto_request_cache* cache, int key_id, const uint8_t* key,
                                        const struct hmac_sha256_cache_entry** out)
 {
-    struct hmac_sha256_cache_entry* entry =
-        &hmac_sha256_cache[((unsigned)key_id) & (HMAC_SHA256_CACHE_SIZE - 1)];
-    if(__atomic_load_n(&entry->valid, __ATOMIC_ACQUIRE)
+    struct hmac_sha256_cache_entry* entry = select_hmac_sha256_cache_entry(cache, key_id, key);
+    if(entry->valid
     && entry->key_id == key_id
     && !memcmp(entry->raw_key, key, sizeof(entry->raw_key)))
     {
@@ -133,10 +129,8 @@ static int get_hmac_sha256_cache_entry(int key_id, const uint8_t* key,
     struct hmac_sha256_cache_entry temp = {.key_id = key_id};
     memcpy(temp.raw_key, key, sizeof(temp.raw_key));
     hmac_sha256_seed(&temp.inner_ctx, &temp.outer_ctx, temp.raw_key);
-
-    __atomic_store_n(&entry->valid, 0, __ATOMIC_RELAXED);
+    temp.valid = 1;
     memcpy(entry, &temp, sizeof(temp));
-    __atomic_store_n(&entry->valid, 1, __ATOMIC_RELEASE);
     *out = entry;
     return 0;
 }
@@ -170,13 +164,14 @@ exit:
     return ans;
 }
 
-int pfs_hmac_virtual(uint8_t* out, int key_id, const uint8_t* key, uint64_t data, size_t data_size)
+int pfs_hmac_virtual(struct crypto_request_cache* cache, uint8_t* out, int key_id, const uint8_t* key,
+                     uint64_t data, size_t data_size)
 {
     struct virt2phys_local_cache data_cache = {0};
     br_sha256_context ctx;
     uelf_fpu_enter();
     const struct hmac_sha256_cache_entry* hmac_keys;
-    if(get_hmac_sha256_cache_entry(key_id, key, &hmac_keys))
+    if(get_hmac_sha256_cache_entry(cache, key_id, key, &hmac_keys))
     {
         uelf_fpu_exit();
         return -1;
@@ -203,10 +198,35 @@ int pfs_hmac_virtual(uint8_t* out, int key_id, const uint8_t* key, uint64_t data
     return 0;
 }
 
-static int get_xts_key_cache_entry(int key_id, const uint8_t* key, const struct xts_key_cache_entry** out)
+static struct xts_key_cache_entry* select_xts_key_cache_entry(struct crypto_request_cache* cache, int key_id,
+                                                              const uint8_t* key)
 {
-    struct xts_key_cache_entry* entry = &xts_key_cache[((unsigned)key_id) & (XTS_KEY_CACHE_SIZE - 1)];
-    if(__atomic_load_n(&entry->valid, __ATOMIC_ACQUIRE)
+    for(size_t i = 0; i < PFS_XTS_KEY_CACHE_SLOTS; i++)
+    {
+        struct xts_key_cache_entry* entry = &cache->xts[i];
+        if(entry->valid
+        && entry->key_id == key_id
+        && !memcmp(entry->raw_key, key, sizeof(entry->raw_key)))
+            return entry;
+    }
+    for(size_t i = 0; i < PFS_XTS_KEY_CACHE_SLOTS; i++)
+    {
+        struct xts_key_cache_entry* entry = &cache->xts[i];
+        if(!entry->valid)
+            return entry;
+    }
+    struct xts_key_cache_entry* entry = &cache->xts[cache->xts_next_slot];
+    cache->xts_next_slot++;
+    if(cache->xts_next_slot == PFS_XTS_KEY_CACHE_SLOTS)
+        cache->xts_next_slot = 0;
+    return entry;
+}
+
+static int get_xts_key_cache_entry(struct crypto_request_cache* cache, int key_id, const uint8_t* key,
+                                   const struct xts_key_cache_entry** out)
+{
+    struct xts_key_cache_entry* entry = select_xts_key_cache_entry(cache, key_id, key);
+    if(entry->valid
     && entry->key_id == key_id
     && !memcmp(entry->raw_key, key, sizeof(entry->raw_key)))
     {
@@ -221,16 +241,14 @@ static int get_xts_key_cache_entry(int key_id, const uint8_t* key, const struct 
         return -1;
     if(isal_aes_keyexp_128(key, temp.tweak_key_enc, temp.tweak_key_dec))
         return -1;
-
-    __atomic_store_n(&entry->valid, 0, __ATOMIC_RELAXED);
+    temp.valid = 1;
     memcpy(entry, &temp, sizeof(temp));
-    __atomic_store_n(&entry->valid, 1, __ATOMIC_RELEASE);
     *out = entry;
     return 0;
 }
 
-int pfs_xts_virtual(uint64_t dst, uint64_t src, int key_id, const uint8_t* key, uint64_t start,
-                    uint32_t count, int is_encrypt)
+int pfs_xts_virtual(struct crypto_request_cache* cache, uint64_t dst, uint64_t src, int key_id,
+                    const uint8_t* key, uint64_t start, uint32_t count, int is_encrypt)
 {
     enum { SECTOR_SIZE = 4096 };
     static uint8_t input[SECTOR_SIZE], output[SECTOR_SIZE];
@@ -239,7 +257,7 @@ int pfs_xts_virtual(uint64_t dst, uint64_t src, int key_id, const uint8_t* key, 
     struct virt2phys_local_cache dst_cache = {0};
     int ans = -1;
     uelf_fpu_enter();
-    if(get_xts_key_cache_entry(key_id, key, &xts_keys))
+    if(get_xts_key_cache_entry(cache, key_id, key, &xts_keys))
         goto exit;
     while(count)
     {

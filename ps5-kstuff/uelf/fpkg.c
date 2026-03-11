@@ -56,7 +56,8 @@ static int is_xts_message(const uint64_t msg_data[21])
 }
 
 static struct crypto_message_result handle_non_xts_message(uint64_t msg, const uint64_t msg_data[21],
-                                                           uint64_t bytes_cap, uint64_t* bytes_handled)
+                                                           uint64_t bytes_cap, uint64_t* bytes_handled,
+                                                           struct crypto_request_cache* cache)
 {
     struct crypto_message_result result = {
         .emulated_messages = 0,
@@ -77,7 +78,7 @@ static struct crypto_message_result handle_non_xts_message(uint64_t msg, const u
             return result;
         uint8_t hash[32] = {0};
         *bytes_handled += msg_data[1];
-        if(bytes_cap < *bytes_handled && pfs_hmac_virtual(hash, idx, key, msg_data[2], msg_data[1]))
+        if(bytes_cap < *bytes_handled && pfs_hmac_virtual(cache, hash, idx, key, msg_data[2], msg_data[1]))
         {
             result.emulated_messages = 1;
             result.status = -1;
@@ -92,7 +93,8 @@ static struct crypto_message_result handle_non_xts_message(uint64_t msg, const u
 }
 
 static struct crypto_message_result handle_xts_message_run(uint64_t msg, const uint64_t first_msg_data[21],
-                                                           uint64_t bytes_cap, uint64_t* bytes_handled)
+                                                           uint64_t bytes_cap, uint64_t* bytes_handled,
+                                                           struct crypto_request_cache* cache)
 {
     struct crypto_message_result result = {
         .emulated_messages = 0,
@@ -148,9 +150,9 @@ static struct crypto_message_result handle_xts_message_run(uint64_t msg, const u
 
     if(skip_sectors < total_sectors)
     {
-        if(pfs_xts_virtual(dst + ((uint64_t)skip_sectors << 12), src + ((uint64_t)skip_sectors << 12),
-                           idx, key, start_sector + skip_sectors, total_sectors - skip_sectors,
-                           is_encrypt))
+        if(pfs_xts_virtual(cache, dst + ((uint64_t)skip_sectors << 12),
+                           src + ((uint64_t)skip_sectors << 12), idx, key,
+                           start_sector + skip_sectors, total_sectors - skip_sectors, is_encrypt))
         {
             result.emulated_messages = result.total_messages;
             result.status = -1;
@@ -178,6 +180,7 @@ static int handle_crypto_request(uint64_t* regs, uint64_t bytes_handled)
     int total_status = 0;
     int handled = 0;
     uint64_t new_bytes_handled = 0;
+    struct crypto_request_cache cache = {0};
 
     uint64_t start = (fwver >= 0x800) ? regs[RBX] : regs[R14];
     uelf_fpu_enter();
@@ -192,8 +195,8 @@ static int handle_crypto_request(uint64_t* regs, uint64_t bytes_handled)
         }
 
         struct crypto_message_result result = is_xts_message(msg_data)
-            ? handle_xts_message_run(msg, msg_data, bytes_handled, &new_bytes_handled)
-            : handle_non_xts_message(msg, msg_data, bytes_handled, &new_bytes_handled);
+            ? handle_xts_message_run(msg, msg_data, bytes_handled, &new_bytes_handled, &cache)
+            : handle_non_xts_message(msg, msg_data, bytes_handled, &new_bytes_handled, &cache);
         int status = result.status;
 
         if (status == EINTR) // partial decrypt, need to restart the syscall
