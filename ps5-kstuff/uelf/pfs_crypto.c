@@ -251,7 +251,7 @@ int pfs_xts_virtual(struct crypto_request_cache* cache, uint64_t dst, uint64_t s
                     const uint8_t* key, uint64_t start, uint32_t count, int is_encrypt)
 {
     enum { SECTOR_SIZE = 4096 };
-    static uint8_t input[SECTOR_SIZE], output[SECTOR_SIZE];
+    uint8_t sector[SECTOR_SIZE];
     const struct xts_key_cache_entry* xts_keys;
     struct virt2phys_local_cache src_cache = {0};
     struct virt2phys_local_cache dst_cache = {0};
@@ -294,18 +294,18 @@ int pfs_xts_virtual(struct crypto_request_cache* cache, uint64_t dst, uint64_t s
         }
 
         uint64_t tweak[2] = {start, 0};
-        if(copy_from_kernel(input, src, SECTOR_SIZE))
+        if(copy_from_kernel(sector, src, SECTOR_SIZE))
             goto exit;
         if(is_encrypt) {
             if(isal_aes_xts_enc_128_expanded_key(xts_keys->tweak_key_enc, xts_keys->data_key_enc, (void*)tweak,
-                                                 SECTOR_SIZE, input, output))
+                                                 SECTOR_SIZE, sector, sector))
                 goto exit;
         } else {
             if(isal_aes_xts_dec_128_expanded_key(xts_keys->tweak_key_enc, xts_keys->data_key_dec, (void*)tweak,
-                                                 SECTOR_SIZE, input, output))
+                                                 SECTOR_SIZE, sector, sector))
                 goto exit;
         }
-        if(copy_to_kernel(dst, output, SECTOR_SIZE))
+        if(copy_to_kernel(dst, sector, SECTOR_SIZE))
             goto exit;
         dst += SECTOR_SIZE;
         src += SECTOR_SIZE;
