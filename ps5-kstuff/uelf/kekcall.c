@@ -111,7 +111,7 @@ void handle_kekcall_trap(uint64_t* regs, uint32_t trap)
         {
             stack_frame_2[1] = MKTRAP(TRAP_KEKCALL, 4);
             
-            stack_frame_2[8] = kpeek64(kpeek64(regs[RDI]+td_pcb) + pcb_fsbase + (fwver >= 0x1000 ? 0x10 : 0));
+            stack_frame_2[8] = kpeek64(get_pcb_field_ptr(get_thread_pcb(regs[RDI]), pcb_fsbase));
             kpoke64(stack_frame[13]+td_retval, 0);
         }
         else

@@ -51,13 +51,28 @@ static inline void pop_stack(uint64_t* regs, void* data, size_t sz)
     regs[RSP] += sz;
 }
 
+static inline uint64_t get_pcb_field_ptr(uint64_t pcb, uint64_t field_offset)
+{
+    return pcb + field_offset + (fwver >= 0x1000 ? 0x10 : 0);
+}
+
+static inline uint64_t get_thread_pcb(uint64_t td)
+{
+    return kpeek64(td + td_pcb);
+}
+
+static inline uint64_t get_current_pcb(void)
+{
+    return get_thread_pcb(kpeek64((uint64_t)pcpu));
+}
+
 static inline int get_pcb_dbregs(void)
 {
-    return (kpeek64(kpeek64(kpeek64((uint64_t)pcpu)+td_pcb)+pcb_flags+(fwver >= 0x1000 ? 0x10 : 0)) & PCB_DBREGS) ? 1 : 0;
+    return (kpeek64(get_pcb_field_ptr(get_current_pcb(), pcb_flags)) & PCB_DBREGS) ? 1 : 0;
 }
 
 static inline void set_pcb_dbregs(void)
 {
-    uint64_t p_pcb_flags = kpeek64(kpeek64((uint64_t)pcpu)+td_pcb)+pcb_flags+(fwver >= 0x1000 ? 0x10 : 0);
+    uint64_t p_pcb_flags = get_pcb_field_ptr(get_current_pcb(), pcb_flags);
     kpoke64(p_pcb_flags, kpeek64(p_pcb_flags) | PCB_DBREGS);
 }

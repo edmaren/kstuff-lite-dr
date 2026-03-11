@@ -87,7 +87,7 @@ from_userspace:
         if((regs[CS] & 3)) //from userspace
         {
             //determine correct gsbase for userspace
-            uint64_t gsbase = kpeek64(kpeek64(kpeek64((uint64_t)pcpu)+td_pcb)+pcb_gsbase+(fwver >= 0x1000 ? 0x10 : 0));
+            uint64_t gsbase = kpeek64(get_pcb_field_ptr(get_current_pcb(), pcb_gsbase));
             //arm wrmsr in the exit path
             uint64_t args[3] = {gsbase >> 32, 0xc0000101, (uint32_t)gsbase};
             copy_to_kernel(wrmsr_args, args, sizeof(args));
