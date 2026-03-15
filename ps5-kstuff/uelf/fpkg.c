@@ -183,7 +183,7 @@ static int handle_crypto_request(uint64_t* regs, uint64_t bytes_handled)
     int handled = 0;
     uint64_t new_bytes_handled = 0;
 
-    uint64_t start = (fwver >= 0x800) ? regs[RBX] : regs[R14];
+    uint64_t start = (FWVER >= 0x800) ? regs[RBX] : regs[R14];
     uelf_fpu_enter();
 
     for (uint64_t msg = start; msg && !total_status;)
@@ -232,7 +232,7 @@ static int handle_crypto_request(uint64_t* regs, uint64_t bytes_handled)
             total_status = -1;
         }
 
-        crypto_request_emulated(regs, (fwver >= 0x800) ? regs[RBX] : regs[R14], total_status);
+        crypto_request_emulated(regs, (FWVER >= 0x800) ? regs[RBX] : regs[R14], total_status);
 
         uint64_t end_time = rdtsc();
         /*log_word(0x1234);

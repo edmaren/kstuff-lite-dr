@@ -199,7 +199,7 @@ void handle_fself_trap(uint64_t* regs, uint32_t trapno)
 {
     if (trapno == 1)
     {
-		uint64_t self_header = kpeek64(regs[(fwver >= 0x800) ? RBX : R14] + 56);
+		uint64_t self_header = kpeek64(regs[(FWVER >= 0x800) ? RBX : R14] + 56);
 
         char fself_header_backup[(48 + mini_syscore_header_size + 15) & -16];
         pop_stack(regs, fself_header_backup, sizeof(fself_header_backup));
@@ -215,7 +215,7 @@ int try_handle_fself_mailbox(uint64_t* regs, uint64_t lr)
 {
     if(lr == (uint64_t)sceSblServiceMailbox_lr_verifyHeader)
     {
-        uint64_t self_context = regs[(fwver >= 0x800) ? RBX : R14];
+        uint64_t self_context = regs[(FWVER >= 0x800) ? RBX : R14];
 		uint64_t self_header = kpeek64(self_context + 56);
 		uint32_t size;
         copy_from_kernel(&size, regs[RDX]+16, 4);
@@ -239,9 +239,9 @@ int try_handle_fself_mailbox(uint64_t* regs, uint64_t lr)
     else if(lr == (uint64_t)sceSblServiceMailbox_lr_loadSelfSegment)
     {
         uint64_t ctx =
-            (fwver >= 0x1000) ? kpeek64(regs[RBP] - 232) :
-            (fwver >= 0x900 && fwver <= 0x960) ? regs[R14] :
-            (fwver >= 0x800 && fwver <= 0x860) ? kpeek64(regs[RBP] - 240) :
+            (FWVER >= 0x1000) ? kpeek64(regs[RBP] - 232) :
+            (FWVER >= 0x900 && FWVER <= 0x960) ? regs[R14] :
+            (FWVER >= 0x800 && FWVER <= 0x860) ? kpeek64(regs[RBP] - 240) :
             regs[RBX];
         if(get_context_fself_info(ctx, 0, 0, 0, 0))
         {
@@ -252,8 +252,8 @@ int try_handle_fself_mailbox(uint64_t* regs, uint64_t lr)
     else if(lr == (uint64_t)sceSblServiceMailbox_lr_decryptSelfBlock)
     {
         uint64_t ctx =
-            (fwver >= 0x800) ? regs[R12] :
-            (fwver >= 0x500 && fwver <= 0x761) ? kpeek64(regs[RBP] - 192) :
+            (FWVER >= 0x800) ? regs[R12] :
+            (FWVER >= 0x500 && FWVER <= 0x761) ? kpeek64(regs[RBP] - 192) :
             kpeek64(regs[RBP] - sceSblServiceMailbox_decryptSelfBlock_rsp_to_rbp +
                     sceSblServiceMailbox_decryptSelfBlock_rsp_to_self_context);
         if(get_context_fself_info(ctx, 0, 0, 0, 0))
@@ -268,8 +268,8 @@ int try_handle_fself_mailbox(uint64_t* regs, uint64_t lr)
     else if(lr == (uint64_t)sceSblServiceMailbox_lr_decryptMultipleSelfBlocks)
     {
         uint64_t ctx =
-            (fwver >= 0x600) ? kpeek64(regs[RBP] - 208) :
-            (fwver >= 0x500 && fwver <= 0x550) ? kpeek64(regs[RBP] - 216) :
+            (FWVER >= 0x600) ? kpeek64(regs[RBP] - 208) :
+            (FWVER >= 0x500 && FWVER <= 0x550) ? kpeek64(regs[RBP] - 216) :
             regs[R13];
         if(get_context_fself_info(ctx, 0, 0, 0, 0))
         {
@@ -334,7 +334,7 @@ int try_handle_fself_trap(uint64_t* regs)
     }
     else if(regs[RIP] == (uint64_t)loadSelfSegment_watchpoint)
     {
-		regs[(fwver >= 0x800) ? RAX : R10] |= 0xffffull << 48;
+		regs[(FWVER >= 0x800) ? RAX : R10] |= 0xffffull << 48;
 
         uint64_t frame[4];
         copy_from_kernel(frame, regs[RSP], sizeof(frame));

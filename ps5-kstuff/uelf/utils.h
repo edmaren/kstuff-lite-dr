@@ -11,6 +11,7 @@ extern char fwver[];
 
 extern char dmem[];
 #define DMEM dmem
+#define FWVER ((uint64_t)(uintptr_t)fwver)
 
 int virt2phys(uint64_t addr, uint64_t* phys, uint64_t* phys_limit);
 int copy_from_kernel(void* dst, uint64_t src, uint64_t sz);
@@ -53,7 +54,7 @@ static inline void pop_stack(uint64_t* regs, void* data, size_t sz)
 
 static inline uint64_t get_pcb_field_ptr(uint64_t pcb, uint64_t field_offset)
 {
-    return pcb + field_offset + (fwver >= 0x1000 ? 0x10 : 0);
+    return pcb + field_offset + (FWVER >= 0x1000 ? 0x10 : 0);
 }
 
 static inline uint64_t get_thread_pcb(uint64_t td)
