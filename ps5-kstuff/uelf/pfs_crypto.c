@@ -178,46 +178,41 @@ exit:
     return ans;
 }
 
-int pfs_hmac_virtual(struct crypto_request_cache* cache, uint8_t* out, int key_id, const uint8_t* key,
-                     uint64_t data, size_t data_size)
+int pfs_hmac_virtual_fpu_held(struct crypto_request_cache* cache, uint8_t* out, int key_id, const uint8_t* key,
+                              uint64_t data, size_t data_size)
 {
     struct virt2phys_local_cache data_cache = {0};
     struct uelf_sha256_context ctx;
-    uelf_fpu_enter();
     const struct hmac_sha256_cache_entry* hmac_keys;
     if(get_hmac_sha256_cache_entry(cache, key_id, key, &hmac_keys))
-    {
-        uelf_fpu_exit();
         return -1;
-    }
     ctx = hmac_keys->inner_ctx;
     while(data_size)
     {
         uint64_t chunk_cur;
         uint64_t chunk_end;
         if(!virt2phys_local(&data_cache, data, &chunk_cur, &chunk_end))
-        {
-            uelf_fpu_exit();
             return -1;
-        }
         size_t chk = chunk_end - chunk_cur;
         if(chk > data_size)
             chk = data_size;
         if(uelf_sha256_update(&ctx, DMEM+chunk_cur, chk))
-        {
-            uelf_fpu_exit();
             return -1;
-        }
         data += chk;
         data_size -= chk;
     }
-    if(hmac_sha256_finalize(&hmac_keys->inner_ctx, &hmac_keys->outer_ctx, &ctx, out))
-    {
-        uelf_fpu_exit();
+    if(hmac_sha256_finalize(&hmac_keys->outer_ctx, &ctx, out))
         return -1;
-    }
-    uelf_fpu_exit();
     return 0;
+}
+
+int pfs_hmac_virtual(struct crypto_request_cache* cache, uint8_t* out, int key_id, const uint8_t* key,
+                     uint64_t data, size_t data_size)
+{
+    uelf_fpu_enter();
+    int ans = pfs_hmac_virtual_fpu_held(cache, out, key_id, key, data, data_size);
+    uelf_fpu_exit();
+    return ans;
 }
 
 static int xts_key_cache_entry_matches(const struct xts_key_cache_entry* entry, int key_id, const uint8_t* key)
@@ -273,18 +268,16 @@ static int get_xts_key_cache_entry(struct crypto_request_cache* cache, int key_i
     return 0;
 }
 
-int pfs_xts_virtual(struct crypto_request_cache* cache, uint64_t dst, uint64_t src, int key_id,
-                    const uint8_t* key, uint64_t start, uint32_t count, int is_encrypt)
+int pfs_xts_virtual_fpu_held(struct crypto_request_cache* cache, uint64_t dst, uint64_t src, int key_id,
+                             const uint8_t* key, uint64_t start, uint32_t count, int is_encrypt)
 {
     enum { SECTOR_SIZE = 4096 };
     uint8_t sector[SECTOR_SIZE];
     const struct xts_key_cache_entry* xts_keys;
     struct virt2phys_local_cache src_cache = {0};
     struct virt2phys_local_cache dst_cache = {0};
-    int ans = -1;
-    uelf_fpu_enter();
     if(get_xts_key_cache_entry(cache, key_id, key, &xts_keys))
-        goto exit;
+        return -1;
     while(count)
     {
         uint64_t src_phys, src_end, dst_phys, dst_end;
@@ -308,7 +301,7 @@ int pfs_xts_virtual(struct crypto_request_cache* cache, uint64_t dst, uint64_t s
                     : isal_aes_xts_dec_128_expanded_key(xts_keys->tweak_key_enc, xts_keys->data_key_dec, (void*)tweak,
                                                         SECTOR_SIZE, DMEM + src_phys, DMEM + dst_phys);
                 if(err)
-                    goto exit;
+                    return -1;
                 dst_phys += SECTOR_SIZE;
                 src_phys += SECTOR_SIZE;
                 dst += SECTOR_SIZE;
@@ -321,25 +314,31 @@ int pfs_xts_virtual(struct crypto_request_cache* cache, uint64_t dst, uint64_t s
 
         uint64_t tweak[2] = {start, 0};
         if(copy_from_kernel(sector, src, SECTOR_SIZE))
-            goto exit;
+            return -1;
         if(is_encrypt) {
             if(isal_aes_xts_enc_128_expanded_key(xts_keys->tweak_key_enc, xts_keys->data_key_enc, (void*)tweak,
                                                  SECTOR_SIZE, sector, sector))
-                goto exit;
+                return -1;
         } else {
             if(isal_aes_xts_dec_128_expanded_key(xts_keys->tweak_key_enc, xts_keys->data_key_dec, (void*)tweak,
                                                  SECTOR_SIZE, sector, sector))
-                goto exit;
+                return -1;
         }
         if(copy_to_kernel(dst, sector, SECTOR_SIZE))
-            goto exit;
+            return -1;
         dst += SECTOR_SIZE;
         src += SECTOR_SIZE;
         start++;
         count--;
     }
-    ans = 0;
-exit:
+    return 0;
+}
+
+int pfs_xts_virtual(struct crypto_request_cache* cache, uint64_t dst, uint64_t src, int key_id,
+                    const uint8_t* key, uint64_t start, uint32_t count, int is_encrypt)
+{
+    uelf_fpu_enter();
+    int ans = pfs_xts_virtual_fpu_held(cache, dst, src, key_id, key, start, count, is_encrypt);
     uelf_fpu_exit();
     return ans;
 }

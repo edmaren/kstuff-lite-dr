@@ -41,5 +41,9 @@ struct crypto_request_cache
 int pfs_derive_fake_keys(const uint8_t* p_eekpfs, const uint8_t* crypt_seed, uint8_t* ek, uint8_t* sk);
 int pfs_hmac_virtual(struct crypto_request_cache* cache, uint8_t* out, int key_id, const uint8_t* key,
                      uint64_t data, size_t data_size);
+int pfs_hmac_virtual_fpu_held(struct crypto_request_cache* cache, uint8_t* out, int key_id, const uint8_t* key,
+                              uint64_t data, size_t data_size);
 int pfs_xts_virtual(struct crypto_request_cache* cache, uint64_t dst, uint64_t src, int key_id,
                     const uint8_t* key, uint64_t start, uint32_t count, int is_encrypt);
+int pfs_xts_virtual_fpu_held(struct crypto_request_cache* cache, uint64_t dst, uint64_t src, int key_id,
+                             const uint8_t* key, uint64_t start, uint32_t count, int is_encrypt);

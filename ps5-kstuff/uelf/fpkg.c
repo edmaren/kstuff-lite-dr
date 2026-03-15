@@ -80,7 +80,7 @@ static struct crypto_message_result handle_non_xts_message(uint64_t msg, const u
             return result;
         uint8_t hash[32] = {0};
         *bytes_handled += msg_data[1];
-        if(bytes_cap < *bytes_handled && pfs_hmac_virtual(cache, hash, idx, key, msg_data[2], msg_data[1]))
+        if(bytes_cap < *bytes_handled && pfs_hmac_virtual_fpu_held(cache, hash, idx, key, msg_data[2], msg_data[1]))
         {
             result.emulated_messages = 1;
             result.status = -1;
@@ -152,9 +152,9 @@ static struct crypto_message_result handle_xts_message_run(uint64_t msg, const u
 
     if(skip_sectors < total_sectors)
     {
-        if(pfs_xts_virtual(cache, dst + ((uint64_t)skip_sectors << 12),
-                           src + ((uint64_t)skip_sectors << 12), idx, key,
-                           start_sector + skip_sectors, total_sectors - skip_sectors, is_encrypt))
+        if(pfs_xts_virtual_fpu_held(cache, dst + ((uint64_t)skip_sectors << 12),
+                                    src + ((uint64_t)skip_sectors << 12), idx, key,
+                                    start_sector + skip_sectors, total_sectors - skip_sectors, is_encrypt))
         {
             result.emulated_messages = result.total_messages;
             result.status = -1;
