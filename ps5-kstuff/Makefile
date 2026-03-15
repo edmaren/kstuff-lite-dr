@@ -44,5 +44,5 @@ uelf/uelf.bin: uelf/uelf
 BearSSL/build/libbearssl.a: build_bearssl.sh overrides.h
 	bash build_bearssl.sh
 
-isa-l_crypto/bin/isa-l_crypto.a: build_isal_crypto.sh isa_l_crypto_ps5_minimal.c
+isa-l_crypto/bin/isa-l_crypto.a: build_isal_crypto.sh isa_l_crypto_ps5_minimal.c isa_l_crypto_ps5_sha256_zen2.asm
 	bash build_isal_crypto.sh
