@@ -29,6 +29,19 @@ static void copy_decrypted_self_blocks(char* dmem, const uint64_t* src, const ui
         uint64_t run_dst = dst[i];
         size_t run_size = SELF_BLOCK_SIZE;
 
+        if(run_src == run_dst)
+        {
+            while(i + 1 < count
+               && src[i + 1] == run_src + run_size
+               && dst[i + 1] == run_dst + run_size)
+            {
+                i++;
+                run_size += SELF_BLOCK_SIZE;
+            }
+            i++;
+            continue;
+        }
+
         // Overlapping runs rely on per-block copy order.
         while(i + 1 < count
            && src[i + 1] == run_src + run_size
