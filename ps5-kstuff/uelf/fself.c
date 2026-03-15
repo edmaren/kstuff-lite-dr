@@ -16,6 +16,34 @@ static uint64_t s_auth_info_for_exec_ps4[17] = {0x3100000000000001, 0x2000038000
 
 enum { SELF_BLOCK_SIZE = 16384 };
 
+static int fself_block_ranges_overlap(uint64_t src, uint64_t dst, size_t size)
+{
+    return src < dst ? dst - src < size : src - dst < size;
+}
+
+static void copy_decrypted_self_blocks(char* dmem, const uint64_t* src, const uint64_t* dst, uint32_t count)
+{
+    for(uint32_t i = 0; i < count;)
+    {
+        uint64_t run_src = src[i];
+        uint64_t run_dst = dst[i];
+        size_t run_size = SELF_BLOCK_SIZE;
+
+        // Overlapping runs rely on per-block copy order.
+        while(i + 1 < count
+           && src[i + 1] == run_src + run_size
+           && dst[i + 1] == run_dst + run_size
+           && !fself_block_ranges_overlap(run_src, run_dst, run_size + SELF_BLOCK_SIZE))
+        {
+            i++;
+            run_size += SELF_BLOCK_SIZE;
+        }
+
+        memcpy(dmem + run_dst, dmem + run_src, run_size);
+        i++;
+    }
+}
+
 struct fself_header_info
 {
     int is_fself;
@@ -277,18 +305,7 @@ int try_handle_fself_mailbox(uint64_t* regs, uint64_t lr)
             copy_from_kernel(request, regs[RDX], sizeof(request));
             uint64_t* src = (uint64_t*)(DMEM + request[1]);
             uint64_t* dst = (uint64_t*)(DMEM + request[2]);
-            uint32_t count = request[5];
-            for(uint32_t i = 0; i < count;)
-            {
-                uint64_t run_src = src[i];
-                uint64_t run_dst = dst[i];
-                size_t run_size = SELF_BLOCK_SIZE;
-                while(++i < count
-                   && src[i] == run_src + run_size
-                   && dst[i] == run_dst + run_size)
-                    run_size += SELF_BLOCK_SIZE;
-                memcpy(DMEM + run_dst, DMEM + run_src, run_size);
-            }
+            copy_decrypted_self_blocks(DMEM, src, dst, request[5]);
             pop_stack(regs, &regs[RIP], 8);
             regs[RAX] = 0;
         }
