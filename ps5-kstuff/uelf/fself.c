@@ -280,11 +280,12 @@ int try_handle_fself_mailbox(uint64_t* regs, uint64_t lr)
     {
         uint64_t self_context = regs[(FWVER >= 0x800) ? RBX : R14];
         uint64_t ctx_data[8];
-		uint64_t self_header = kpeek64(self_context + 56);
+        uint64_t self_header;
 		uint32_t size;
         copy_from_kernel(&size, regs[RDX]+16, 4);
         if(copy_from_kernel(ctx_data, self_context, sizeof(ctx_data)))
             return 0;
+        self_header = ctx_data[7];
         remember_context_fself_info(self_context, self_header, size, ctx_data);
         if(is_header_fself(self_header, size, 0, 0, 0, 0))
         {
