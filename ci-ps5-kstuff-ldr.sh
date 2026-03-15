@@ -1,8 +1,58 @@
 #!/usr/bin/env bash
 
-git submodule update --init --recursive || exit 1
-cd ps5-kstuff
-make
-cd ..
-cd ps5-kstuff-ldr
-make
+set -euo pipefail
+
+repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+cd "$repo_root"
+
+git_safe() {
+    git -c core.fsmonitor=false "$@"
+}
+
+repair_git_symlinks() {
+    local meta path target current repaired=0
+
+    while IFS=$'\t' read -r meta path; do
+        [ -n "${path:-}" ] || continue
+
+        target="$(git_safe cat-file -p "${meta#120000 blob }")"
+
+        if [ -L "$path" ]; then
+            continue
+        fi
+
+        if [ -f "$path" ]; then
+            current="$(tr -d '\r' < "$path")"
+            if [ "$current" = "$target" ]; then
+                rm -f "$path"
+                ln -s "$target" "$path"
+                repaired=$((repaired + 1))
+                continue
+            fi
+        fi
+
+        printf 'error: %s should be a symlink to %s\n' "$path" "$target" >&2
+        printf 'hint: re-checkout the repository with symlink support enabled.\n' >&2
+        return 1
+    done < <(git_safe ls-tree -r --full-tree HEAD | awk '$1 == 120000 { print $1 " " $2 " " $3 "\t" $4 }')
+
+    if [ "$repaired" -gt 0 ]; then
+        printf 'Repaired %d git symlink(s) in the working tree.\n' "$repaired" >&2
+    fi
+}
+
+git_safe submodule update --init --recursive
+repair_git_symlinks
+
+if [ -z "${PS5_PAYLOAD_SDK:-}" ] && [ -d /opt/ps5-payload-sdk ]; then
+    export PS5_PAYLOAD_SDK=/opt/ps5-payload-sdk
+fi
+
+if [ -z "${PS5_PAYLOAD_SDK:-}" ] || [ ! -d "$PS5_PAYLOAD_SDK" ]; then
+    printf 'error: PS5_PAYLOAD_SDK is not set to a valid SDK path.\n' >&2
+    printf 'hint: install the SDK to /opt/ps5-payload-sdk or export PS5_PAYLOAD_SDK explicitly.\n' >&2
+    exit 1
+fi
+
+make -C ps5-kstuff
+make -C ps5-kstuff-ldr
