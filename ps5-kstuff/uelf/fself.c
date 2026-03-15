@@ -66,6 +66,7 @@ static struct
     uint64_t ctx;
     uint64_t header;
     uint32_t size;
+    uint64_t snapshot[8];
     int valid;
 } s_context_cache;
 
@@ -140,24 +141,34 @@ static int is_header_fself(uint64_t header, uint32_t size, uint16_t* e_type, int
     return 1;
 }
 
-static void remember_context_fself_info(uint64_t ctx, uint64_t header, uint32_t size)
+static int same_context_fself_info(uint64_t ctx, const uint64_t snapshot[8])
+{
+    return s_context_cache.valid
+        && s_context_cache.ctx == ctx
+        && !memcmp(s_context_cache.snapshot, snapshot, sizeof(s_context_cache.snapshot));
+}
+
+static void remember_context_fself_info(uint64_t ctx, uint64_t header, uint32_t size,
+                                        const uint64_t snapshot[8])
 {
     s_context_cache.ctx = ctx;
     s_context_cache.header = header;
     s_context_cache.size = size;
+    memcpy(s_context_cache.snapshot, snapshot, sizeof(s_context_cache.snapshot));
     s_context_cache.valid = 1;
 }
 
 static int get_context_fself_info(uint64_t ctx, uint16_t* e_type, int* is_ps4, uint64_t* authinfo, int* have_authinfo)
 {
+    uint64_t ctx_data[8];
     if(!ctx)
         return 0;
-    if(!s_context_cache.valid || s_context_cache.ctx != ctx)
+    if(copy_from_kernel(ctx_data, ctx, sizeof(ctx_data)))
+        return 0;
+    if(!same_context_fself_info(ctx, ctx_data))
     {
-        uint64_t ctx_data[8];
-        if(copy_from_kernel(ctx_data, ctx, sizeof(ctx_data)))
-            return 0;
-        remember_context_fself_info(ctx, ctx_data[7], (uint32_t)ctx_data[1]);
+        s_header_cache.valid = 0;
+        remember_context_fself_info(ctx, ctx_data[7], (uint32_t)ctx_data[1], ctx_data);
     }
     return is_header_fself(s_context_cache.header, s_context_cache.size, e_type, is_ps4, authinfo, have_authinfo);
 }
@@ -244,10 +255,13 @@ int try_handle_fself_mailbox(uint64_t* regs, uint64_t lr)
     if(lr == (uint64_t)sceSblServiceMailbox_lr_verifyHeader)
     {
         uint64_t self_context = regs[(FWVER >= 0x800) ? RBX : R14];
+        uint64_t ctx_data[8];
 		uint64_t self_header = kpeek64(self_context + 56);
 		uint32_t size;
         copy_from_kernel(&size, regs[RDX]+16, 4);
-        remember_context_fself_info(self_context, self_header, size);
+        if(copy_from_kernel(ctx_data, self_context, sizeof(ctx_data)))
+            return 0;
+        remember_context_fself_info(self_context, self_header, size, ctx_data);
         if(is_header_fself(self_header, size, 0, 0, 0, 0))
         {
             char fself_header_backup[(48 + mini_syscore_header_size + 15) & -16];
