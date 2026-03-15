@@ -49,7 +49,9 @@ struct fself_header_info
     int is_fself;
     uint16_t e_type;
     int is_ps4;
+    int authinfo_loaded;
     int have_authinfo;
+    uint64_t authinfo_offset;
     uint64_t authinfo[17];
 };
 
@@ -102,18 +104,25 @@ static int parse_header_fself(uint64_t header, uint32_t size, struct fself_heade
     if(ex[1] != 1) //not fself
         return 0;
     info->is_fself = 1;
-    uint64_t sig_off = ex_offset + 64 + 48 + n_entries * 80 + 80;
+    info->authinfo_offset = ex_offset + 64 + 48 + n_entries * 80 + 80;
+    return info->is_fself;
+}
+
+static void load_header_fself_authinfo(uint64_t header, uint32_t size, struct fself_header_info* info)
+{
+    uint64_t header_end = header + size;
     uint64_t signature[18] = {0};
 
-    if(!copy_from_kernel_buffer(signature, header, header_end, sig_off, sizeof(signature)) && signature[0] == 0x88)
+    if(!copy_from_kernel_buffer(signature, header, header_end, info->authinfo_offset, sizeof(signature))
+    && signature[0] == 0x88)
     {
         memcpy(info->authinfo, signature+1, 0x88);
         info->have_authinfo = 1;
     }
-    return info->is_fself;
+    info->authinfo_loaded = 1;
 }
 
-static const struct fself_header_info* get_header_fself_info(uint64_t header, uint32_t size)
+static struct fself_header_info* get_header_fself_info(uint64_t header, uint32_t size)
 {
     if(!s_header_cache.valid || s_header_cache.header != header || s_header_cache.size != size)
     {
@@ -127,9 +136,11 @@ static const struct fself_header_info* get_header_fself_info(uint64_t header, ui
 
 static int is_header_fself(uint64_t header, uint32_t size, uint16_t* e_type, int* is_ps4, uint64_t* authinfo, int* have_authinfo)
 {
-    const struct fself_header_info* info = get_header_fself_info(header, size);
+    struct fself_header_info* info = get_header_fself_info(header, size);
     if(!info->is_fself)
         return 0;
+    if((authinfo || have_authinfo) && !info->authinfo_loaded)
+        load_header_fself_authinfo(header, size, info);
     if(e_type)
         *e_type = info->e_type;
     if(is_ps4)
