@@ -43,13 +43,19 @@ int uelf_sha256_update(struct uelf_sha256_context* ctx, const void* data, size_t
     return 0;
 }
 
+int uelf_sha256_final(struct uelf_sha256_context* ctx, uint8_t out[UELF_SHA256_DIGEST_SIZE])
+{
+    uint8_t flags = (ctx->next_flags == ISAL_HASH_FIRST) ? ISAL_HASH_ENTIRE : ISAL_HASH_LAST;
+
+    if(sha256_submit(ctx, NULL, 0, flags))
+        return -1;
+    ctx->next_flags = ISAL_HASH_LAST;
+    sha256_words_to_bytes(out, ctx->ctx.job.result_digest);
+    return 0;
+}
+
 int uelf_sha256_out(const struct uelf_sha256_context* ctx, uint8_t out[UELF_SHA256_DIGEST_SIZE])
 {
     struct uelf_sha256_context tmp = *ctx;
-    uint8_t flags = (tmp.next_flags == ISAL_HASH_FIRST) ? ISAL_HASH_ENTIRE : ISAL_HASH_LAST;
-
-    if(sha256_submit(&tmp, NULL, 0, flags))
-        return -1;
-    sha256_words_to_bytes(out, tmp.ctx.job.result_digest);
-    return 0;
+    return uelf_sha256_final(&tmp, out);
 }

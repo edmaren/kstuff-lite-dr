@@ -57,7 +57,7 @@ int sha256_buffer(const unsigned char *in, unsigned long inlen, unsigned char *o
     uelf_sha256_init(&ctx);
     if(uelf_sha256_update(&ctx, in, inlen))
         goto exit;
-    if(uelf_sha256_out(&ctx, out))
+    if(uelf_sha256_final(&ctx, out))
         goto exit;
     err = 0;
 exit:

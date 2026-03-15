@@ -15,4 +15,5 @@ struct uelf_sha256_context
 
 void uelf_sha256_init(struct uelf_sha256_context* ctx);
 int uelf_sha256_update(struct uelf_sha256_context* ctx, const void* data, size_t len);
+int uelf_sha256_final(struct uelf_sha256_context* ctx, uint8_t out[UELF_SHA256_DIGEST_SIZE]);
 int uelf_sha256_out(const struct uelf_sha256_context* ctx, uint8_t out[UELF_SHA256_DIGEST_SIZE]);

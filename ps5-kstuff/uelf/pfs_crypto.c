@@ -69,21 +69,17 @@ static int hmac_sha256_seed(struct uelf_sha256_context* inner_ctx, struct uelf_s
     return 0;
 }
 
-static int hmac_sha256_finalize(const struct uelf_sha256_context* inner_seed,
-                                const struct uelf_sha256_context* outer_seed,
+static int hmac_sha256_finalize(const struct uelf_sha256_context* outer_seed,
                                 struct uelf_sha256_context* inner_ctx,
                                 uint8_t out[HMAC_SHA256_DIGEST_SIZE])
 {
     uint8_t inner_hash[HMAC_SHA256_DIGEST_SIZE];
-    if(uelf_sha256_out(inner_ctx, inner_hash))
+    if(uelf_sha256_final(inner_ctx, inner_hash))
         return -1;
     *inner_ctx = *outer_seed;
     if(uelf_sha256_update(inner_ctx, inner_hash, sizeof(inner_hash)))
         return -1;
-    if(uelf_sha256_out(inner_ctx, out))
-        return -1;
-    *inner_ctx = *inner_seed;
-    return 0;
+    return uelf_sha256_final(inner_ctx, out);
 }
 
 static int hmac_sha256_once(uint8_t out[HMAC_SHA256_DIGEST_SIZE], const uint8_t key[32],
@@ -97,7 +93,7 @@ static int hmac_sha256_once(uint8_t out[HMAC_SHA256_DIGEST_SIZE], const uint8_t 
         return -1;
     if(part2_len && uelf_sha256_update(&ctx, part2, part2_len))
         return -1;
-    return hmac_sha256_finalize(&inner_ctx, &outer_ctx, &ctx, out);
+    return hmac_sha256_finalize(&outer_ctx, &ctx, out);
 }
 
 static int hmac_sha256_cache_entry_matches(const struct hmac_sha256_cache_entry* entry, int key_id,
