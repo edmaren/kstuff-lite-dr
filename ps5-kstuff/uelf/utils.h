@@ -16,21 +16,26 @@ extern char dmem[];
 int virt2phys(uint64_t addr, uint64_t* phys, uint64_t* phys_limit);
 int copy_from_kernel(void* dst, uint64_t src, uint64_t sz);
 int copy_to_kernel(uint64_t dst, const void* src, uint64_t sz);
-void run_gadget(uint64_t* regs);
-void read_dbgregs(uint64_t* dr);
-void write_dbgregs(const uint64_t* dr);
-uint64_t read_cr0(void);
-void write_cr0(uint64_t);
+int run_gadget_checked(uint64_t* regs);
+int read_dbgregs_checked(uint64_t* dr);
+int write_dbgregs_checked(const uint64_t* dr);
+int read_cr0_checked(uint64_t* cr0);
+int write_cr0_checked(uint64_t cr0);
 void start_syscall_with_dbgregs(uint64_t* regs, const uint64_t* dbgregs);
 void handle_utils_trap(uint64_t* regs, uint32_t trapno);
 void handle_syscall(uint64_t* regs, int allow_kekcall);
 int rdmsr(uint32_t which, uint64_t* ans);
 int wrmsr(uint32_t which, uint64_t value);
 
+static inline int kpeek64_checked(uintptr_t kptr, uint64_t* value)
+{
+    return copy_from_kernel(value, kptr, sizeof(*value));
+}
+
 static inline uint64_t kpeek64(uintptr_t kptr)
 {
     uint64_t ans = 0;
-    if(copy_from_kernel(&ans, kptr, sizeof(ans)))
+    if(kpeek64_checked(kptr, &ans))
         log_word((uint64_t)__builtin_return_address(0));
     return ans;
 }
@@ -40,16 +45,26 @@ static inline void kpoke64(uintptr_t kptr, uint64_t value)
     copy_to_kernel(kptr, &value, sizeof(value));
 }
 
-static inline void push_stack(uint64_t* regs, const void* data, size_t sz)
+static inline int push_stack_checked(uint64_t* regs, const void* data, size_t sz)
 {
-    regs[RSP] -= sz;
-    copy_to_kernel(regs[RSP], data, sz);
+    uint64_t rsp = regs[RSP] - sz;
+    if(copy_to_kernel(rsp, data, sz))
+        return 1;
+    regs[RSP] = rsp;
+    return 0;
 }
 
-static inline void pop_stack(uint64_t* regs, void* data, size_t sz)
+static inline int pop_stack_checked(uint64_t* regs, void* data, size_t sz)
 {
-    copy_from_kernel(data, regs[RSP], sz);
+    if(copy_from_kernel(data, regs[RSP], sz))
+        return 1;
     regs[RSP] += sz;
+    return 0;
+}
+
+static inline int peek_stack_checked(const uint64_t* regs, void* data, size_t sz)
+{
+    return copy_from_kernel(data, regs[RSP], sz);
 }
 
 static inline uint64_t get_pcb_field_ptr(uint64_t pcb, uint64_t field_offset)
@@ -57,23 +72,97 @@ static inline uint64_t get_pcb_field_ptr(uint64_t pcb, uint64_t field_offset)
     return pcb + field_offset + (FWVER >= 0x1000 ? 0x10 : 0);
 }
 
-static inline uint64_t get_thread_pcb(uint64_t td)
+static inline int get_thread_pcb_checked(uint64_t td, uint64_t* pcb)
 {
-    return kpeek64(td + td_pcb);
+    return kpeek64_checked(td + td_pcb, pcb);
 }
 
-static inline uint64_t get_current_pcb(void)
+static inline int get_current_pcb_checked(uint64_t* pcb)
 {
-    return get_thread_pcb(kpeek64((uint64_t)pcpu));
+    uint64_t td;
+    if(kpeek64_checked((uint64_t)pcpu, &td))
+        return 1;
+    return get_thread_pcb_checked(td, pcb);
 }
 
-static inline int get_pcb_dbregs(void)
+static inline int get_current_pcb_flags_ptr_checked(uint64_t* p_pcb_flags)
 {
-    return (kpeek64(get_pcb_field_ptr(get_current_pcb(), pcb_flags)) & PCB_DBREGS) ? 1 : 0;
+    uint64_t pcb;
+    if(get_current_pcb_checked(&pcb))
+        return 1;
+    *p_pcb_flags = get_pcb_field_ptr(pcb, pcb_flags);
+    return 0;
 }
 
-static inline void set_pcb_dbregs(void)
+static inline int get_pcb_dbregs_checked(int* enabled)
 {
-    uint64_t p_pcb_flags = get_pcb_field_ptr(get_current_pcb(), pcb_flags);
-    kpoke64(p_pcb_flags, kpeek64(p_pcb_flags) | PCB_DBREGS);
+    uint64_t flags;
+    uint64_t p_pcb_flags;
+    if(get_current_pcb_flags_ptr_checked(&p_pcb_flags))
+        return 1;
+    if(kpeek64_checked(p_pcb_flags, &flags))
+        return 1;
+    *enabled = !!(flags & PCB_DBREGS);
+    return 0;
+}
+
+static inline int get_pcb_dbregs_checked_at(uint64_t p_pcb_flags, uint64_t* flags, int* enabled)
+{
+    if(kpeek64_checked(p_pcb_flags, flags))
+        return 1;
+    *enabled = !!(*flags & PCB_DBREGS);
+    return 0;
+}
+
+static inline int set_pcb_dbregs_checked(void);
+static inline int clear_pcb_dbregs_checked(void);
+
+static inline int set_pcb_dbregs_checked(void)
+{
+    uint64_t p_pcb_flags;
+    uint64_t flags;
+    if(get_current_pcb_flags_ptr_checked(&p_pcb_flags))
+        return 1;
+    if(kpeek64_checked(p_pcb_flags, &flags))
+        return 1;
+    return copy_to_kernel(p_pcb_flags, &(const uint64_t){flags | PCB_DBREGS}, sizeof(uint64_t));
+}
+
+static inline int set_pcb_dbregs_checked_at(uint64_t p_pcb_flags, uint64_t flags)
+{
+    return copy_to_kernel(p_pcb_flags, &(const uint64_t){flags | PCB_DBREGS}, sizeof(uint64_t));
+}
+
+static inline int clear_pcb_dbregs_checked(void)
+{
+    uint64_t p_pcb_flags;
+    uint64_t flags;
+    if(get_current_pcb_flags_ptr_checked(&p_pcb_flags))
+        return 1;
+    if(kpeek64_checked(p_pcb_flags, &flags))
+        return 1;
+    return copy_to_kernel(p_pcb_flags, &(const uint64_t){flags & ~PCB_DBREGS}, sizeof(uint64_t));
+}
+
+static inline int clear_pcb_dbregs_checked_at(uint64_t p_pcb_flags, uint64_t flags)
+{
+    return copy_to_kernel(p_pcb_flags, &(const uint64_t){flags & ~PCB_DBREGS}, sizeof(uint64_t));
+}
+
+static inline int restore_dbgregs_state_checked(const uint64_t* dr, int had_dbregs)
+{
+    if(write_dbgregs_checked(dr))
+        return 1;
+    if(!had_dbregs && clear_pcb_dbregs_checked())
+        return 1;
+    return 0;
+}
+
+static inline int restore_dbgregs_state_checked_at(uint64_t p_pcb_flags, uint64_t flags, const uint64_t* dr, int had_dbregs)
+{
+    if(write_dbgregs_checked(dr))
+        return 1;
+    if(!had_dbregs && clear_pcb_dbregs_checked_at(p_pcb_flags, flags))
+        return 1;
+    return 0;
 }

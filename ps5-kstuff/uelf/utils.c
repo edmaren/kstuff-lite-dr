@@ -80,16 +80,20 @@ int copy_to_kernel(uint64_t dst, const void* src, uint64_t sz)
 
 uint64_t yield(void);
 
-void run_gadget(uint64_t* regs)
+int run_gadget_checked(uint64_t* regs)
 {
-    copy_to_kernel(trap_frame, regs, NREGS*8);
+    if(copy_to_kernel(trap_frame, regs, NREGS*8))
+        return EFAULT;
     uint64_t just_return = yield();
     uint64_t jr_frame[5];
-    copy_from_kernel(regs, trap_frame, NREGS*8);
-    copy_from_kernel(jr_frame, just_return, 40);
+    if(copy_from_kernel(regs, trap_frame, NREGS*8))
+        return EFAULT;
+    if(copy_from_kernel(jr_frame, just_return, 40))
+        return EFAULT;
     regs[RDX] = jr_frame[2];
     regs[RCX] = jr_frame[3];
     regs[RAX] = jr_frame[4];
+    return 0;
 }
 
 extern char dr2gpr_start[];
@@ -103,19 +107,21 @@ extern char mov_cr0_rax[];
 extern char doreti_iret[];
 extern char syscall_after[];
 
-void read_dbgregs(uint64_t* dr)
+int read_dbgregs_checked(uint64_t* dr)
 {
     uint64_t regs[NREGS] = { [RIP] = (uint64_t)dr2gpr_start, 0x20, 2, 0, 0, [R8] = 0xdeadbeefdeadbeef };
-    run_gadget(regs);
+    if(run_gadget_checked(regs))
+        return EFAULT;
     dr[0] = regs[R15];
     dr[1] = regs[R14];
     dr[2] = regs[R13];
     dr[3] = regs[R12];
     dr[4] = regs[R11];
     dr[5] = regs[RAX];
+    return 0;
 }
 
-void write_dbgregs(const uint64_t* dr)
+int write_dbgregs_checked(const uint64_t* dr)
 {
     uint64_t regs[NREGS] = { [RIP] = (uint64_t)gpr2dr_1_start, 0x20, 2, 0, 0, [R8] = 0xdeadbeefdeadbeef };
     regs[R15] = dr[0];
@@ -125,12 +131,13 @@ void write_dbgregs(const uint64_t* dr)
     regs[R11] = dr[4];
     regs[RCX] = dr[5];
     regs[RAX] = dr[5];
-    run_gadget(regs);
+    if(run_gadget_checked(regs))
+        return EFAULT;
     regs[R11] = dr[4];
     regs[R15] = dr[5];
     regs[R12] = 0xdeadbeefdeadbeef;
     regs[RIP] = (uint64_t)gpr2dr_2_start;
-    run_gadget(regs);
+    return run_gadget_checked(regs);
 }
 
 int rdmsr(uint32_t which, uint64_t* ans)
@@ -139,7 +146,8 @@ int rdmsr(uint32_t which, uint64_t* ans)
         [RIP] = (uint64_t)rdmsr_start, 0x20, 0x102, 0, 0,
         [RCX] = which,
     };
-    run_gadget(regs);
+    if(run_gadget_checked(regs))
+        return 0;
     if(regs[RIP] == (uint64_t)rdmsr_start)
         return 0;
     *ans = regs[RDX] << 32 | (uint32_t)regs[RAX];
@@ -154,26 +162,29 @@ int wrmsr(uint32_t which, uint64_t value)
         [RAX] = (uint32_t)value,
         [RDX] = value >> 32,
     };
-    run_gadget(regs);
+    if(run_gadget_checked(regs))
+        return 0;
     return regs[RIP] != (uint64_t)wrmsr_ret;
 }
 
-uint64_t read_cr0(void)
+int read_cr0_checked(uint64_t* cr0)
 {
     uint64_t regs[NREGS] = {
         [RIP] = (uint64_t)mov_rax_cr0, 0x20, 0x102, 0, 0,
     };
-    run_gadget(regs);
-    return regs[RAX];
+    if(run_gadget_checked(regs))
+        return EFAULT;
+    *cr0 = regs[RAX];
+    return 0;
 }
 
-void write_cr0(uint64_t cr0)
+int write_cr0_checked(uint64_t cr0)
 {
     uint64_t regs[NREGS] = {
         [RIP] = (uint64_t)mov_cr0_rax, 0x20, 0x102, 0, 0,
         [RAX] = cr0,
     };
-    run_gadget(regs);
+    return run_gadget_checked(regs);
 }
 
 void start_syscall_with_dbgregs(uint64_t* regs, const uint64_t* dbgregs)
@@ -182,10 +193,27 @@ void start_syscall_with_dbgregs(uint64_t* regs, const uint64_t* dbgregs)
         (uint64_t)doreti_iret,
         MKTRAP(TRAP_UTILS, 1), 0, 0, 0, 0,
     };
-    read_dbgregs(stack_frame+6);
-    push_stack(regs, stack_frame, sizeof(stack_frame));
-    set_pcb_dbregs();
-    write_dbgregs(dbgregs);
+    uint64_t p_pcb_flags;
+    uint64_t pcb_flags_value;
+    int had_dbregs;
+    if(read_dbgregs_checked(stack_frame+6))
+        return;
+    if(get_current_pcb_flags_ptr_checked(&p_pcb_flags))
+        return;
+    if(get_pcb_dbregs_checked_at(p_pcb_flags, &pcb_flags_value, &had_dbregs))
+        return;
+    stack_frame[4] = had_dbregs;
+    if(push_stack_checked(regs, stack_frame, sizeof(stack_frame)))
+        return;
+    if(set_pcb_dbregs_checked_at(p_pcb_flags, pcb_flags_value))
+        goto rollback_stack;
+    if(write_dbgregs_checked(dbgregs))
+    {
+        restore_dbgregs_state_checked_at(p_pcb_flags, pcb_flags_value, stack_frame+6, had_dbregs);
+rollback_stack:
+        regs[RSP] += sizeof(stack_frame);
+        return;
+    }
 }
 
 void handle_utils_trap(uint64_t* regs, uint32_t trapno)
@@ -193,8 +221,11 @@ void handle_utils_trap(uint64_t* regs, uint32_t trapno)
     if(trapno == 1)
     {
         uint64_t stack_frame[12];
-        pop_stack(regs, stack_frame, sizeof(stack_frame));
-        write_dbgregs(stack_frame+5);
+        if(peek_stack_checked(regs, stack_frame, sizeof(stack_frame)))
+            return;
+        if(restore_dbgregs_state_checked(stack_frame+5, stack_frame[4]))
+            return;
+        regs[RSP] += sizeof(stack_frame);
         regs[RIP] = stack_frame[11];
     }
 }
