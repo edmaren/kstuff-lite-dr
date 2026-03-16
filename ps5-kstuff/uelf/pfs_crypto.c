@@ -99,7 +99,7 @@ static int hmac_sha256_once(uint8_t out[HMAC_SHA256_DIGEST_SIZE], const uint8_t 
 static int hmac_sha256_cache_entry_matches(const struct hmac_sha256_cache_entry* entry, int key_id,
                                            const uint8_t* key)
 {
-    return __atomic_load_n(&entry->valid, __ATOMIC_ACQUIRE)
+    return entry->valid
         && entry->key_id == key_id
         && !memcmp(entry->key, key, PFS_CRYPTO_KEY_SIZE);
 }
@@ -116,7 +116,7 @@ static struct hmac_sha256_cache_entry* select_hmac_sha256_cache_entry(struct cry
     for(size_t i = 0; i < PFS_HMAC_SHA256_CACHE_SLOTS; i++)
     {
         struct hmac_sha256_cache_entry* entry = &cache->hmac[i];
-        if(!__atomic_load_n(&entry->valid, __ATOMIC_ACQUIRE))
+        if(!entry->valid)
             return entry;
     }
     struct hmac_sha256_cache_entry* entry = &cache->hmac[cache->hmac_next_slot];
@@ -140,9 +140,9 @@ static int get_hmac_sha256_cache_entry(struct crypto_request_cache* cache, int k
     memcpy(temp.key, key, sizeof(temp.key));
     if(hmac_sha256_seed(&temp.inner_ctx, &temp.outer_ctx, key))
         return -1;
-    __atomic_store_n(&entry->valid, 0, __ATOMIC_RELEASE);
+    entry->valid = 0;
     memcpy(entry, &temp, sizeof(temp));
-    __atomic_store_n(&entry->valid, 1, __ATOMIC_RELEASE);
+    entry->valid = 1;
     *out = entry;
     return 0;
 }
@@ -217,7 +217,7 @@ int pfs_hmac_virtual(struct crypto_request_cache* cache, uint8_t* out, int key_i
 
 static int xts_key_cache_entry_matches(const struct xts_key_cache_entry* entry, int key_id, const uint8_t* key)
 {
-    return __atomic_load_n(&entry->valid, __ATOMIC_ACQUIRE)
+    return entry->valid
         && entry->key_id == key_id
         && !memcmp(entry->key, key, PFS_CRYPTO_KEY_SIZE);
 }
@@ -234,7 +234,7 @@ static struct xts_key_cache_entry* select_xts_key_cache_entry(struct crypto_requ
     for(size_t i = 0; i < PFS_XTS_KEY_CACHE_SLOTS; i++)
     {
         struct xts_key_cache_entry* entry = &cache->xts[i];
-        if(!__atomic_load_n(&entry->valid, __ATOMIC_ACQUIRE))
+        if(!entry->valid)
             return entry;
     }
     struct xts_key_cache_entry* entry = &cache->xts[cache->xts_next_slot];
@@ -261,9 +261,9 @@ static int get_xts_key_cache_entry(struct crypto_request_cache* cache, int key_i
         return -1;
     if(isal_aes_keyexp_128(key, temp.tweak_key_enc, temp.tweak_key_dec))
         return -1;
-    __atomic_store_n(&entry->valid, 0, __ATOMIC_RELEASE);
+    entry->valid = 0;
     memcpy(entry, &temp, sizeof(temp));
-    __atomic_store_n(&entry->valid, 1, __ATOMIC_RELEASE);
+    entry->valid = 1;
     *out = entry;
     return 0;
 }
