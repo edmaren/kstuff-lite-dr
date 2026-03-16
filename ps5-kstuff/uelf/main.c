@@ -30,6 +30,7 @@ extern uint64_t wrmsr_args;
 
 void handle_syscall(uint64_t* regs, int allow_kekcall)
 {
+    const uint64_t syscall_extra = (FWVER >= 0x1000 ? 0x10 : 0);
 #define IS_PPR(which) (regs[RAX] == (uint64_t)&sysents[SYS_##which])
 #ifdef FREEBSD
 #define IS_PS4(which) 0
@@ -39,15 +40,22 @@ void handle_syscall(uint64_t* regs, int allow_kekcall)
 #define IS(which) (IS_PPR(which) || IS_PS4(which))
     if(IS_PPR(getppid) && allow_kekcall)
     {
+        enum { KEKCALL_ARGS_OFFSET_MAX = syscall_rsp_to_regs_stash + 0x10 + 8 };
+        uint8_t syscall_frame[KEKCALL_ARGS_OFFSET_MAX + sizeof(uint64_t) * NREGS];
         uint64_t args[NREGS] = {0};
-        copy_from_kernel(args, regs[RSP]+syscall_rsp_to_regs_stash+(FWVER >= 0x1000 ? 0x10 : 0)+8, sizeof(args));
+        uint64_t args_offset = syscall_rsp_to_regs_stash + syscall_extra + 8;
+        if(copy_from_kernel(syscall_frame, regs[RSP], args_offset + sizeof(args)))
+            return;
+        memcpy(args, syscall_frame + args_offset, sizeof(args));
         int err = handle_kekcall(regs, args, args[RAX]>>32);
         if(err != ENOSYS)
         {
+            uint64_t syscall_lr = *(const uint64_t*)syscall_frame;
             if(!err)
                 kpoke64(regs[RDI]+td_retval, args[RAX]);
             regs[RAX] = err;
-            pop_stack(regs, &regs[RIP], 8);
+            regs[RSP] += 8;
+            regs[RIP] = syscall_lr;
         }
     }
 #ifndef FREEBSD
@@ -79,18 +87,29 @@ void handle_syscall(uint64_t* regs, int allow_kekcall)
 
 void handle(uint64_t* regs)
 {
-    if(!(regs[CS] & 3))
+    const int initial_from_user = !!(regs[CS] & 3);
+    const int initial_from_copyio = !!(regs[EFLAGS] & 0x40000);
+    const uint64_t syscall_extra = (FWVER >= 0x1000 ? 0x10 : 0);
+    if(!initial_from_user)
         regs[EFLAGS] |= 0x10000; //RF
-    if((regs[CS] & 3) || (regs[EFLAGS] & 0x40000)) //from userspace, or from copyin/copyout
+    if(initial_from_user || initial_from_copyio) //from userspace, or from copyin/copyout
     {
 from_userspace:
-        if((regs[CS] & 3)) //from userspace
+        {
+        const int from_user = !!(regs[CS] & 3);
+        if(from_user) //from userspace
         {
             //determine correct gsbase for userspace
-            uint64_t gsbase = kpeek64(get_pcb_field_ptr(get_current_pcb(), pcb_gsbase));
+            uint64_t pcb;
+            uint64_t gsbase;
+            if(get_current_pcb_checked(&pcb))
+                return;
+            if(copy_from_kernel(&gsbase, get_pcb_field_ptr(pcb, pcb_gsbase), sizeof(gsbase)))
+                return;
             //arm wrmsr in the exit path
             uint64_t args[3] = {gsbase >> 32, 0xc0000101, (uint32_t)gsbase};
-            copy_to_kernel(wrmsr_args, args, sizeof(args));
+            if(copy_to_kernel(wrmsr_args, args, sizeof(args)))
+                return;
         }
         //inject a fake #DB or #GP exception
         uint64_t stack;
@@ -100,8 +119,11 @@ from_userspace:
         else
 #endif
         {
-            if((regs[CS] & 3))
-                copy_from_kernel(&stack, (uint64_t)tss+4, 8);
+            if(from_user)
+            {
+                if(copy_from_kernel(&stack, (uint64_t)tss+4, 8))
+                    return;
+            }
             else
                 stack = regs[RSP];
         }
@@ -109,36 +131,46 @@ from_userspace:
         if(have_error_code)
         {
             stack -= 48;
-            copy_to_kernel(stack, &regs[ERRC], 48);
+            if(copy_to_kernel(stack, &regs[ERRC], 48))
+                return;
             regs[RIP] = (uint64_t)int13_handler;
         }
         else
         {
             stack -= 40;
-            copy_to_kernel(stack, &regs[RIP], 40);
+            if(copy_to_kernel(stack, &regs[RIP], 40))
+                return;
             regs[RIP] = (uint64_t)int1_handler;
         }
         regs[CS] = 0x20;
         regs[EFLAGS] = 2;
         regs[RSP] = stack;
         regs[SS] = 0;
+        }
     }
     else if(regs[RIP] == (uint64_t)syscall_before)
     {
+        uint64_t syscall_target;
         regs[RAX] |= 0xffffull << 48;
-        regs[RSI] = regs[RSP] + syscall_rsp_to_rsi+(FWVER >= 0x1000 ? 0x10 : 0);
-        push_stack(regs, (const uint64_t[1]){(uint64_t)syscall_after}, 8);
-        regs[RIP] = kpeek64(regs[RAX]+8);
+        regs[RSI] = regs[RSP] + syscall_rsp_to_rsi + syscall_extra;
+        if(copy_from_kernel(&syscall_target, regs[RAX]+8, sizeof(syscall_target)))
+            return;
+        if(push_stack_checked(regs, (const uint64_t[1]){(uint64_t)syscall_after}, 8))
+            return;
+        regs[RIP] = syscall_target;
         handle_syscall(regs, 1);
     }
     else if(regs[RIP] == (uint64_t)doreti_iret)
     {
         uint64_t frame[5];
-        copy_from_kernel(frame, regs[RSP], sizeof(frame));
+        if(copy_from_kernel(frame, regs[RSP], 16))
+            return;
         if((frame[1] & 3)) //#GP in iret to userspace
         {
             //pretend that the #GP was inside userspace
             //stock kernel crashes on this, lol
+            if(copy_from_kernel(frame + 2, regs[RSP] + 16, sizeof(frame) - 16))
+                return;
             memcpy(&regs[RIP], frame, sizeof(frame));
             goto from_userspace;
         }
@@ -196,9 +228,11 @@ from_userspace:
 void main(uint64_t just_return)
 {
     uint64_t regs[NREGS];
-    copy_from_kernel(regs, trap_frame, sizeof(regs));
+    if(copy_from_kernel(regs, trap_frame, sizeof(regs)))
+        return;
     uint64_t jr_frame[5];
-    copy_from_kernel(jr_frame, just_return, 40);
+    if(copy_from_kernel(jr_frame, just_return, 40))
+        return;
     have_error_code = jr_frame[0];
     regs[RDX] = jr_frame[2];
     regs[RCX] = jr_frame[3];
