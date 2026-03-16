@@ -22,14 +22,23 @@ int handle_kekcall(uint64_t* regs, uint64_t* args, uint32_t nr)
             (uint64_t)doreti_iret,
             (uint64_t)nop_ret, regs[CS], regs[EFLAGS], regs[RSP], regs[SS],
         };
-        read_dbgregs(stack_frame+6);
-        if(!get_pcb_dbregs())
+        int have_dbgregs;
+        if(read_dbgregs_checked(stack_frame+6))
+            return EFAULT;
+        if(get_pcb_dbregs_checked(&have_dbgregs))
+            return EFAULT;
+        if(!have_dbgregs)
         {
             stack_frame[6] = stack_frame[7] = stack_frame[8] = stack_frame[9] = 0;
             stack_frame[10] &= -16;
         }
-        push_stack(regs, stack_frame, sizeof(stack_frame));
-        kpoke64(regs[RDI]+td_retval, 0);
+        if(push_stack_checked(regs, stack_frame, sizeof(stack_frame)))
+            return EFAULT;
+        if(copy_to_kernel(regs[RDI]+td_retval, &(const uint64_t){0}, sizeof(uint64_t)))
+        {
+            regs[RSP] += sizeof(stack_frame);
+            return EFAULT;
+        }
         regs[RDI] = regs[RSP] + 48;
         regs[RSI] = args[RDI];
         regs[RDX] = 48;
@@ -38,7 +47,8 @@ int handle_kekcall(uint64_t* regs, uint64_t* args, uint32_t nr)
     else if(nr == 2)
     {
         uint64_t stack_frame[14] = {(uint64_t)doreti_iret, MKTRAP(TRAP_KEKCALL, 1), [12] = regs[RDI]};
-        push_stack(regs, stack_frame, sizeof(stack_frame));
+        if(push_stack_checked(regs, stack_frame, sizeof(stack_frame)))
+            return EFAULT;
         regs[RDI] = args[RDI];
         regs[RSI] = regs[RSP] + 48;
         regs[RDX] = 48;
@@ -55,7 +65,8 @@ int handle_kekcall(uint64_t* regs, uint64_t* args, uint32_t nr)
         stack_frame[6] = args[RDI];
         stack_frame[7] = args[RSI];
         stack_frame[14] = regs[RDI];
-        push_stack(regs, stack_frame, sizeof(stack_frame));
+        if(push_stack_checked(regs, stack_frame, sizeof(stack_frame)))
+            return EFAULT;
         regs[RDI] = args[RDX];
         regs[RSI] = regs[RSP] + 64;
         regs[RDX] = 48;
@@ -74,49 +85,105 @@ void handle_kekcall_trap(uint64_t* regs, uint32_t trap)
     if(trap == 1)
     {
         uint64_t stack_frame[14];
-        pop_stack(regs, stack_frame, sizeof(stack_frame));
+        uint64_t old_dbgregs[6];
+        uint64_t p_pcb_flags;
+        uint64_t pcb_flags_value;
+        int had_dbgregs;
+        if(pop_stack_checked(regs, stack_frame, sizeof(stack_frame)))
+            return;
         regs[RIP] = stack_frame[13];
         if((uint32_t)regs[RAX])
             return;
-        kpoke64(stack_frame[11]+td_retval, 0);
-        set_pcb_dbregs();
-        write_dbgregs(stack_frame+5);
+        if(copy_to_kernel(stack_frame[11]+td_retval, &(const uint64_t){0}, sizeof(uint64_t)))
+        {
+            regs[RAX] = EFAULT;
+            return;
+        }
+        if(read_dbgregs_checked(old_dbgregs)
+        || get_current_pcb_flags_ptr_checked(&p_pcb_flags)
+        || get_pcb_dbregs_checked_at(p_pcb_flags, &pcb_flags_value, &had_dbgregs))
+        {
+            regs[RAX] = EFAULT;
+            return;
+        }
+        if(set_pcb_dbregs_checked_at(p_pcb_flags, pcb_flags_value))
+        {
+            regs[RAX] = EFAULT;
+            return;
+        }
+        if(write_dbgregs_checked(stack_frame+5))
+        {
+            restore_dbgregs_state_checked_at(p_pcb_flags, pcb_flags_value, old_dbgregs, had_dbgregs);
+            regs[RAX] = EFAULT;
+        }
     }
     else if(trap == 2)
     {
         uint64_t stack_frame[15];
-        pop_stack(regs, stack_frame, sizeof(stack_frame));
+        if(pop_stack_checked(regs, stack_frame, sizeof(stack_frame)))
+            return;
         if((uint32_t)regs[RAX])
         {
-            pop_stack(regs, &regs[RIP], 8);
+            if(pop_stack_checked(regs, &regs[RIP], 8))
+                return;
             return;
         }
         uint32_t pid = stack_frame[5];
         uint32_t sysc_no = stack_frame[6];
-        int64_t proc = kpeek64(stack_frame[13]+td_proc);
+        uint64_t proc_u;
+        if(kpeek64_checked(stack_frame[13]+td_proc, &proc_u))
+            goto fail_remote_syscall;
+        int64_t proc = proc_u;
         while(proc < -0x100000000)
-            proc = kpeek64(proc+8);
-        while(proc && (uint32_t)kpeek64(proc+p_pid) != pid)
-            proc = kpeek64(proc);
+        {
+            if(kpeek64_checked(proc+8, &proc_u))
+                goto fail_remote_syscall;
+            proc = proc_u;
+        }
+        while(proc)
+        {
+            uint64_t proc_pid;
+            if(kpeek64_checked(proc+p_pid, &proc_pid))
+                goto fail_remote_syscall;
+            if((uint32_t)proc_pid == pid)
+                break;
+            if(kpeek64_checked(proc, &proc_u))
+                goto fail_remote_syscall;
+            proc = proc_u;
+        }
         if(!proc)
         {
             regs[RAX] = ESRCH;
-            pop_stack(regs, &regs[RIP], 8);
+            if(pop_stack_checked(regs, &regs[RIP], 8))
+                return;
             return;
         }
-        regs[RDI] = kpeek64(proc+16);
+        if(kpeek64_checked(proc+16, &regs[RDI]))
+            goto fail_remote_syscall;
         uint64_t stack_frame_2[14] = {(uint64_t)doreti_iret, MKTRAP(TRAP_KEKCALL, 3), [6] = stack_frame[13], regs[RDI]};
         memcpy(stack_frame_2+8, stack_frame+7, 48);
+        uint64_t sysc_target = 0;
         if(sysc_no == SYS_sysarch && (uint32_t)stack_frame[7] == AMD64_GET_FSBASE)
         {
             stack_frame_2[1] = MKTRAP(TRAP_KEKCALL, 4);
-            
-            stack_frame_2[8] = kpeek64(get_pcb_field_ptr(get_thread_pcb(regs[RDI]), pcb_fsbase));
-            kpoke64(stack_frame[13]+td_retval, 0);
+
+            uint64_t thread_pcb;
+            if(kpeek64_checked(regs[RDI] + td_pcb, &thread_pcb))
+                goto fail_remote_syscall;
+            if(kpeek64_checked(get_pcb_field_ptr(thread_pcb, pcb_fsbase), &stack_frame_2[8]))
+                goto fail_remote_syscall;
+            if(copy_to_kernel(stack_frame[13]+td_retval, &(const uint64_t){0}, sizeof(uint64_t)))
+                goto fail_remote_syscall;
         }
         else
-            kpoke64(regs[RDI]+td_retval, 0);
-        push_stack(regs, stack_frame_2, sizeof(stack_frame_2));
+        {
+            if(kpeek64_checked((uint64_t)&sysents[sysc_no].sy_call, &sysc_target))
+                goto fail_remote_syscall;
+            if(copy_to_kernel(regs[RDI]+td_retval, &(const uint64_t){0}, sizeof(uint64_t)))
+                goto fail_remote_syscall;
+        }
+        if(push_stack_checked(regs, stack_frame_2, sizeof(stack_frame_2)))
+            goto fail_remote_syscall;
         regs[RAX] = (uint64_t)&sysents[sysc_no];
         if(sysc_no == SYS_sysarch && (uint32_t)stack_frame[7] == AMD64_GET_FSBASE)
         {
@@ -127,17 +194,30 @@ void handle_kekcall_trap(uint64_t* regs, uint32_t trap)
         }
         else
         {
-            regs[RIP] = kpeek64((uint64_t)&sysents[sysc_no].sy_call);
+            regs[RIP] = sysc_target;
             regs[RSI] = regs[RSP] + 64;
             handle_syscall(regs, 0);
         }
+        return;
+fail_remote_syscall:
+        regs[RAX] = EFAULT;
+        if(pop_stack_checked(regs, &regs[RIP], 8))
+            return;
+        return;
     }
     else if(trap == 3 || trap == 4)
     {
         uint64_t stack_frame[14];
-        pop_stack(regs, stack_frame, sizeof(stack_frame));
+        if(pop_stack_checked(regs, stack_frame, sizeof(stack_frame)))
+            return;
         if(trap == 3 && !(uint32_t)regs[RAX])
-            kpoke64(stack_frame[5]+td_retval, kpeek64(stack_frame[6]+td_retval));
+        {
+            uint64_t retval;
+            if(kpeek64_checked(stack_frame[6]+td_retval, &retval))
+                regs[RAX] = EFAULT;
+            else
+                kpoke64(stack_frame[5]+td_retval, retval);
+        }
         regs[RIP] = stack_frame[13];
     }
 }

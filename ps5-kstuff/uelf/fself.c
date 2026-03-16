@@ -213,21 +213,45 @@ extern char decryptMultipleSelfBlocks_watchpoint_lr[];
 extern char decryptMultipleSelfBlocks_epilogue[];
 extern char mini_syscore_header[];
 
-static void set_dbgregs_for_watchpoint(uint64_t* regs, const uint64_t* dbgregs, size_t frame_size)
+static int set_dbgregs_for_watchpoint(uint64_t* regs, const uint64_t* dbgregs, size_t frame_size)
 {
-    uint64_t buf[frame_size/8 + 6];
-    pop_stack(regs, buf, frame_size);
-    read_dbgregs(buf + frame_size/8);
-    push_stack(regs, buf, sizeof(buf));
-    set_pcb_dbregs();
-    write_dbgregs(dbgregs);
+    uint64_t buf[frame_size/8 + 7];
+    uint64_t new_rsp;
+    uint64_t p_pcb_flags;
+    uint64_t pcb_flags_value;
+    int had_dbregs;
+    if(peek_stack_checked(regs, buf, frame_size))
+        return 0;
+    if(read_dbgregs_checked(buf + frame_size/8))
+        return 0;
+    if(get_current_pcb_flags_ptr_checked(&p_pcb_flags))
+        return 0;
+    if(get_pcb_dbregs_checked_at(p_pcb_flags, &pcb_flags_value, &had_dbregs))
+        return 0;
+    buf[frame_size/8 + 6] = had_dbregs;
+    new_rsp = regs[RSP] - (sizeof(buf) - frame_size);
+    if(copy_to_kernel(new_rsp, buf, sizeof(buf)))
+        return 0;
+    if(set_pcb_dbregs_checked_at(p_pcb_flags, pcb_flags_value))
+        return 0;
+    if(write_dbgregs_checked(dbgregs))
+    {
+        restore_dbgregs_state_checked_at(p_pcb_flags, pcb_flags_value, buf + frame_size/8, had_dbregs);
+        return 0;
+    }
+    regs[RSP] = new_rsp;
+    return 1;
 }
 
-static void unset_dbgregs_for_watchpoint(uint64_t* regs)
+static int unset_dbgregs_for_watchpoint(uint64_t* regs)
 {
-    uint64_t dbgregs[6];
-    pop_stack(regs, dbgregs, sizeof(dbgregs));
-    write_dbgregs(dbgregs);
+    uint64_t dbgregs[7];
+    if(peek_stack_checked(regs, dbgregs, sizeof(dbgregs)))
+        return 0;
+    if(restore_dbgregs_state_checked(dbgregs, dbgregs[6]))
+        return 0;
+    regs[RSP] += sizeof(dbgregs);
+    return 1;
 }
 
 static uint64_t dbgregs_for_fself[6] = {
@@ -262,14 +286,16 @@ void handle_fself_trap(uint64_t* regs, uint32_t trapno)
 {
     if (trapno == 1)
     {
-		uint64_t self_header = kpeek64(regs[(FWVER >= 0x800) ? RBX : R14] + 56);
-
         char fself_header_backup[(48 + mini_syscore_header_size + 15) & -16];
-        pop_stack(regs, fself_header_backup, sizeof(fself_header_backup));
-
+        uint64_t self_header;
+        if(peek_stack_checked(regs, fself_header_backup, sizeof(fself_header_backup)))
+            return;
+        if(kpeek64_checked(regs[(FWVER >= 0x800) ? RBX : R14] + 56, &self_header))
+            return;
+        if(copy_to_kernel(self_header, fself_header_backup + 40, mini_syscore_header_size))
+            return;
+        regs[RSP] += sizeof(fself_header_backup);
         regs[RIP] = *(uint64_t*)(fself_header_backup + sizeof(fself_header_backup) - 8);
-
-        copy_to_kernel(self_header, fself_header_backup + 40, mini_syscore_header_size);
     }
 }
 
@@ -282,7 +308,8 @@ int try_handle_fself_mailbox(uint64_t* regs, uint64_t lr)
         uint64_t ctx_data[8];
         uint64_t self_header;
 		uint32_t size;
-        copy_from_kernel(&size, regs[RDX]+16, 4);
+        if(copy_from_kernel(&size, regs[RDX]+16, 4))
+            return 0;
         if(copy_from_kernel(ctx_data, self_context, sizeof(ctx_data)))
             return 0;
         self_header = ctx_data[7];
@@ -290,62 +317,106 @@ int try_handle_fself_mailbox(uint64_t* regs, uint64_t lr)
         if(is_header_fself(self_header, size, 0, 0, 0, 0))
         {
             char fself_header_backup[(48 + mini_syscore_header_size + 15) & -16];
+            char mini_header[(mini_syscore_header_size + 15) & -16];
+            uint32_t original_size = size;
             uint64_t trap_frame[6] = {
                 (uint64_t)doreti_iret,
                 MKTRAP(TRAP_FSELF, 1), 0, 0, 0, 0,
             };
             memcpy(fself_header_backup, trap_frame, 48);
-            copy_from_kernel(fself_header_backup+48, self_header, mini_syscore_header_size);
-            push_stack(regs, fself_header_backup, sizeof(fself_header_backup));
-            copy_from_kernel(fself_header_backup+48, (uint64_t)mini_syscore_header, mini_syscore_header_size);
-            copy_to_kernel(self_header, fself_header_backup+48, mini_syscore_header_size);
+            if(copy_from_kernel(fself_header_backup+48, self_header, mini_syscore_header_size))
+                return 0;
+            if(copy_from_kernel(mini_header, (uint64_t)mini_syscore_header, mini_syscore_header_size))
+                return 0;
+            if(copy_to_kernel(self_header, mini_header, mini_syscore_header_size))
+                return 0;
             size = mini_syscore_header_size;
-            copy_to_kernel(regs[RDX]+16, &size, 4);
+            if(copy_to_kernel(regs[RDX]+16, &size, 4))
+            {
+                copy_to_kernel(self_header, fself_header_backup+48, mini_syscore_header_size);
+                return 0;
+            }
+            if(push_stack_checked(regs, fself_header_backup, sizeof(fself_header_backup)))
+            {
+                copy_to_kernel(self_header, fself_header_backup+48, mini_syscore_header_size);
+                copy_to_kernel(regs[RDX]+16, &original_size, 4);
+                return 0;
+            }
         }
     }
     else if(lr == (uint64_t)sceSblServiceMailbox_lr_loadSelfSegment)
     {
-        uint64_t ctx =
-            (FWVER >= 0x1000) ? kpeek64(regs[RBP] - 232) :
-            (FWVER >= 0x900 && FWVER <= 0x960) ? regs[R14] :
-            (FWVER >= 0x800 && FWVER <= 0x860) ? kpeek64(regs[RBP] - 240) :
-            regs[RBX];
+        uint64_t ctx;
+        if(FWVER >= 0x1000)
+        {
+            if(kpeek64_checked(regs[RBP] - 232, &ctx))
+                return 0;
+        }
+        else if(FWVER >= 0x900 && FWVER <= 0x960)
+            ctx = regs[R14];
+        else if(FWVER >= 0x800 && FWVER <= 0x860)
+        {
+            if(kpeek64_checked(regs[RBP] - 240, &ctx))
+                return 0;
+        }
+        else
+            ctx = regs[RBX];
         if(get_context_fself_info(ctx, 0, 0, 0, 0))
         {
-            pop_stack(regs, &regs[RIP], 8);
+            if(pop_stack_checked(regs, &regs[RIP], 8))
+                return 0;
             regs[RAX] = 0;
         }
     }
     else if(lr == (uint64_t)sceSblServiceMailbox_lr_decryptSelfBlock)
     {
-        uint64_t ctx =
-            (FWVER >= 0x800) ? regs[R12] :
-            (FWVER >= 0x500 && FWVER <= 0x761) ? kpeek64(regs[RBP] - 192) :
-            kpeek64(regs[RBP] - sceSblServiceMailbox_decryptSelfBlock_rsp_to_rbp +
-                    sceSblServiceMailbox_decryptSelfBlock_rsp_to_self_context);
+        uint64_t ctx;
+        if(FWVER >= 0x800)
+            ctx = regs[R12];
+        else if(FWVER >= 0x500 && FWVER <= 0x761)
+        {
+            if(kpeek64_checked(regs[RBP] - 192, &ctx))
+                return 0;
+        }
+        else if(kpeek64_checked(regs[RBP] - sceSblServiceMailbox_decryptSelfBlock_rsp_to_rbp +
+                                sceSblServiceMailbox_decryptSelfBlock_rsp_to_self_context, &ctx))
+            return 0;
         if(get_context_fself_info(ctx, 0, 0, 0, 0))
         {
             uint64_t request[8];
-            copy_from_kernel(request, regs[RDX], sizeof(request));
+            if(copy_from_kernel(request, regs[RDX], sizeof(request)))
+                return 0;
+            if(pop_stack_checked(regs, &regs[RIP], 8))
+                return 0;
             memcpy(DMEM+request[1], DMEM+request[2], (uint32_t)request[6]);
-            pop_stack(regs, &regs[RIP], 8);
             regs[RAX] = 0;
         }
     }
     else if(lr == (uint64_t)sceSblServiceMailbox_lr_decryptMultipleSelfBlocks)
     {
-        uint64_t ctx =
-            (FWVER >= 0x600) ? kpeek64(regs[RBP] - 208) :
-            (FWVER >= 0x500 && FWVER <= 0x550) ? kpeek64(regs[RBP] - 216) :
-            regs[R13];
+        uint64_t ctx;
+        if(FWVER >= 0x600)
+        {
+            if(kpeek64_checked(regs[RBP] - 208, &ctx))
+                return 0;
+        }
+        else if(FWVER >= 0x500 && FWVER <= 0x550)
+        {
+            if(kpeek64_checked(regs[RBP] - 216, &ctx))
+                return 0;
+        }
+        else
+            ctx = regs[R13];
         if(get_context_fself_info(ctx, 0, 0, 0, 0))
         {
             uint64_t request[8];
-            copy_from_kernel(request, regs[RDX], sizeof(request));
+            if(copy_from_kernel(request, regs[RDX], sizeof(request)))
+                return 0;
+            if(pop_stack_checked(regs, &regs[RIP], 8))
+                return 0;
             uint64_t* src = (uint64_t*)(DMEM + request[1]);
             uint64_t* dst = (uint64_t*)(DMEM + request[2]);
             copy_decrypted_self_blocks(DMEM, src, dst, request[5]);
-            pop_stack(regs, &regs[RIP], 8);
             regs[RAX] = 0;
         }
     }
@@ -365,6 +436,7 @@ int try_handle_fself_trap(uint64_t* regs)
         int is_ps4;
         if(get_context_fself_info(regs[RDI], &e_type, &is_ps4, authinfo, &have_authinfo))
         {
+            uint64_t ret_addr;
             uint64_t* p_authinfo;
             if(have_authinfo)
                 p_authinfo = authinfo;
@@ -382,29 +454,46 @@ int try_handle_fself_trap(uint64_t* regs)
                 else
                     p_authinfo = s_auth_info_for_exec;
             }
-            copy_to_kernel(regs[R8], p_authinfo, 0x88);
-            pop_stack(regs, &regs[RIP], 8);
+            if(copy_from_kernel(&ret_addr, regs[RSP], sizeof(ret_addr)))
+                return 1;
+            if(copy_to_kernel(regs[R8], p_authinfo, 0x88))
+                return 1;
+            if(copy_to_kernel(regs[RDI] + 62, &(const uint16_t[1]){0xdeb7}, 2))
+                return 1;
+            regs[RSP] += 8;
+            regs[RIP] = ret_addr;
             regs[RAX] = 0;
-            copy_to_kernel(regs[RDI] + 62, &(const uint16_t[1]){0xdeb7}, 2);
         }
     }
     else if(regs[RIP] == (uint64_t)loadSelfSegment_watchpoint)
     {
-		regs[(FWVER >= 0x800) ? RAX : R10] |= 0xffffull << 48;
-
         uint64_t frame[4];
-        copy_from_kernel(frame, regs[RSP], sizeof(frame));
+        if(copy_from_kernel(frame, regs[RSP], sizeof(frame)))
+            return 1;
+        regs[(FWVER >= 0x800) ? RAX : R10] |= 0xffffull << 48;
         if(frame[3] == (uint64_t)loadSelfSegment_watchpoint_lr)
-            set_dbgregs_for_watchpoint(regs, dbgregs_for_loadSelfSegment, sizeof(frame));
+        {
+            if(!set_dbgregs_for_watchpoint(regs, dbgregs_for_loadSelfSegment, sizeof(frame)))
+                return 1;
+        }
         else if(frame[3] == (uint64_t)decryptSelfBlock_watchpoint_lr)
-            set_dbgregs_for_watchpoint(regs, dbgregs_for_decryptSelfBlock, sizeof(frame));
+        {
+            if(!set_dbgregs_for_watchpoint(regs, dbgregs_for_decryptSelfBlock, sizeof(frame)))
+                return 1;
+        }
         else if(frame[3] == (uint64_t)decryptMultipleSelfBlocks_watchpoint_lr)
-            set_dbgregs_for_watchpoint(regs, dbgregs_for_decryptMultipleSelfBlocks, sizeof(frame));
+        {
+            if(!set_dbgregs_for_watchpoint(regs, dbgregs_for_decryptMultipleSelfBlocks, sizeof(frame)))
+                return 1;
+        }
     }
     else if(regs[RIP] == (uint64_t)loadSelfSegment_epilogue
          || regs[RIP] == (uint64_t)decryptSelfBlock_epilogue
          || regs[RIP] == (uint64_t)decryptMultipleSelfBlocks_epilogue)
-         unset_dbgregs_for_watchpoint(regs);
+    {
+         if(!unset_dbgregs_for_watchpoint(regs))
+             return 1;
+    }
     else
         return 0;
     return 1;
