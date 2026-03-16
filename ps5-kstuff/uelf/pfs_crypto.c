@@ -154,7 +154,8 @@ static int pfs_gen_key(uint32_t idx, const uint8_t* seed, const uint8_t* ekpfs, 
 
 int pfs_derive_fake_keys(const uint8_t* p_eekpfs, const uint8_t* crypt_seed, uint8_t* ek, uint8_t* sk)
 {
-    uelf_fpu_enter();
+    if(uelf_fpu_enter())
+        return 0;
     int ans = 0;
     uint8_t eekpfs[256];
     memcpy(eekpfs, p_eekpfs, 256);
@@ -209,7 +210,8 @@ int pfs_hmac_virtual_fpu_held(struct crypto_request_cache* cache, uint8_t* out, 
 int pfs_hmac_virtual(struct crypto_request_cache* cache, uint8_t* out, int key_id, const uint8_t* key,
                      uint64_t data, size_t data_size)
 {
-    uelf_fpu_enter();
+    if(uelf_fpu_enter())
+        return -1;
     int ans = pfs_hmac_virtual_fpu_held(cache, out, key_id, key, data, data_size);
     uelf_fpu_exit();
     return ans;
@@ -337,7 +339,8 @@ int pfs_xts_virtual_fpu_held(struct crypto_request_cache* cache, uint64_t dst, u
 int pfs_xts_virtual(struct crypto_request_cache* cache, uint64_t dst, uint64_t src, int key_id,
                     const uint8_t* key, uint64_t start, uint32_t count, int is_encrypt)
 {
-    uelf_fpu_enter();
+    if(uelf_fpu_enter())
+        return -1;
     int ans = pfs_xts_virtual_fpu_held(cache, dst, src, key_id, key, start, count, is_encrypt);
     uelf_fpu_exit();
     return ans;
