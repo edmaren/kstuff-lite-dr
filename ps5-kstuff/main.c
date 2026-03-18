@@ -12,6 +12,7 @@
 #include "../prosper0gdb/r0gdb.h"
 #include "../prosper0gdb/offsets.h"
 #include "../gdb_stub/dbg.h"
+#include "uelf/shared_area.h"
 #include "uelf/structs.h"
 
 void* dlsym(void*, const char*);
@@ -282,6 +283,9 @@ uint64_t kekcall(uint64_t a, uint64_t b, uint64_t c, uint64_t d, uint64_t e, uin
 #define KEKCALL_WRITE_DR       0x200000027
 #define KEKCALL_RDMSR          0x300000027
 #define KEKCALL_REMOTE_SYSCALL 0x500000027
+#define KEKCALL_READ_PATH_LOG  0x600000027
+#define KEKCALL_SET_PATH_LOG_ENABLED 0x700000027
+#define KEKCALL_SET_PATH_LOG_FILTER  0x800000027
 #define KEKCALL_CHECK          0xffffffff00000027
 
 void* p_kekcall;
@@ -781,11 +785,11 @@ int main(void* ds, int a, int b, uintptr_t c, uintptr_t d)
     for(size_t i = 0; i < 256; i++)
         copyin(comparison_table+256*i, comparison_table_data+256*i, 256);
     uint64_t shared_area;
-    if(comparison_table - comparison_table_base > 4096)
-        shared_area = comparison_table - 4096;
+    if(comparison_table - comparison_table_base > UELF_SHARED_AREA_SIZE)
+        shared_area = comparison_table - UELF_SHARED_AREA_SIZE;
     else
         shared_area = comparison_table + 65536;
-    kmemzero((void*)shared_area, 4096);
+    kmemzero((void*)shared_area, UELF_SHARED_AREA_SIZE);
     uint64_t kernel_dmap = get_dmap_base();
     uint64_t kernel_cr3 = r0gdb_read_cr3();
     uint64_t uelf_virt_base = (find_empty_pml4_index(0) << 39) | (-1ull << 48);

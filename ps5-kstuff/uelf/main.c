@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <sys/sysent.h>
 #include <sys/syscall.h>
+#include <sys/sysproto.h>
 #include "utils.h"
 #include "log.h"
 #include "traps.h"
@@ -27,6 +28,68 @@ extern char tss[];
 extern char int1_handler[];
 extern char int13_handler[];
 extern uint64_t wrmsr_args;
+
+#if KSTUFF_PATHLOG
+static void log_path_syscall(uint64_t* regs)
+{
+    if(regs[RAX] == (uint64_t)&sysents[SYS_open]
+#ifndef FREEBSD
+    || regs[RAX] == (uint64_t)&sysents_ps4[SYS_open]
+#endif
+    )
+    {
+        struct open_args args;
+        if(!copy_from_kernel(&args, regs[RSI], sizeof(args)))
+            log_path_event(UELF_PATH_LOG_KIND_OPEN, (uint64_t)(uintptr_t)args.path);
+    }
+    else if(regs[RAX] == (uint64_t)&sysents[SYS_openat]
+#ifndef FREEBSD
+         || regs[RAX] == (uint64_t)&sysents_ps4[SYS_openat]
+#endif
+    )
+    {
+        struct openat_args args;
+        if(!copy_from_kernel(&args, regs[RSI], sizeof(args)))
+            log_path_event(UELF_PATH_LOG_KIND_OPENAT, (uint64_t)(uintptr_t)args.path);
+    }
+    else if(regs[RAX] == (uint64_t)&sysents[SYS_stat]
+#ifndef FREEBSD
+         || regs[RAX] == (uint64_t)&sysents_ps4[SYS_stat]
+#endif
+    )
+    {
+        struct stat_args args;
+        if(!copy_from_kernel(&args, regs[RSI], sizeof(args)))
+            log_path_event(UELF_PATH_LOG_KIND_STAT, (uint64_t)(uintptr_t)args.path);
+    }
+    else if(regs[RAX] == (uint64_t)&sysents[SYS_lstat]
+#ifndef FREEBSD
+         || regs[RAX] == (uint64_t)&sysents_ps4[SYS_lstat]
+#endif
+    )
+    {
+        struct lstat_args args;
+        if(!copy_from_kernel(&args, regs[RSI], sizeof(args)))
+            log_path_event(UELF_PATH_LOG_KIND_LSTAT, (uint64_t)(uintptr_t)args.path);
+    }
+    else if(regs[RAX] == (uint64_t)&sysents[SYS_nstat]
+#ifndef FREEBSD
+         || regs[RAX] == (uint64_t)&sysents_ps4[SYS_nstat]
+#endif
+    )
+    {
+        struct nstat_args args;
+        if(!copy_from_kernel(&args, regs[RSI], sizeof(args)))
+            log_path_event(UELF_PATH_LOG_KIND_NSTAT, (uint64_t)(uintptr_t)args.path);
+    }
+    else
+    {
+        struct fstatat_args args;
+        if(!copy_from_kernel(&args, regs[RSI], sizeof(args)))
+            log_path_event(UELF_PATH_LOG_KIND_FSTATAT, (uint64_t)(uintptr_t)args.path);
+    }
+}
+#endif
 
 void handle_syscall(uint64_t* regs, int allow_kekcall)
 {
@@ -58,8 +121,19 @@ void handle_syscall(uint64_t* regs, int allow_kekcall)
             regs[RIP] = syscall_lr;
         }
     }
+    else
+    {
+#if KSTUFF_PATHLOG
+        if(IS(open)
+        || IS(openat)
+        || IS(stat)
+        || IS(lstat)
+        || IS(nstat)
+        || IS(fstatat))
+            log_path_syscall(regs);
+#endif
 #ifndef FREEBSD
-    else if(IS(execve)
+        if(IS(execve)
          || IS(dynlib_load_prx)
          || IS(get_self_auth_info)
          || IS(get_sdk_compiled_version)
@@ -68,18 +142,19 @@ void handle_syscall(uint64_t* regs, int allow_kekcall)
          || IS_PPR(mmap)
          || IS_PPR(mlock)
 #endif
-    )
-        handle_fself_syscall(regs);
-    else if(IS(nmount)
-         || IS(unmount))
-        handle_fpkg_syscall(regs);
-    else if(IS(ioctl)
-         || IS_PPR(ioctl))
-        handle_ioctl_syscall(regs);
-    else if(IS(mprotect)
-         || IS_PPR(mdbg_call))
-        handle_syscall_fix(regs);
+        )
+            handle_fself_syscall(regs);
+        else if(IS(nmount)
+             || IS(unmount))
+            handle_fpkg_syscall(regs);
+        else if(IS(ioctl)
+             || IS_PPR(ioctl))
+            handle_ioctl_syscall(regs);
+        else if(IS(mprotect)
+             || IS_PPR(mdbg_call))
+            handle_syscall_fix(regs);
 #endif
+    }
 #undef IS
 #undef IS_PS4
 #undef IS_PPR
