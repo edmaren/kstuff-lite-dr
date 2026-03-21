@@ -30,8 +30,18 @@ extern char int13_handler[];
 extern uint64_t wrmsr_args;
 
 #if KSTUFF_PATHLOG
-static void log_path_syscall(uint64_t* regs)
+static void arm_pathlog_wrapper(uint64_t* regs, struct uelf_path_log_entry* pending)
 {
+    regs[RDX] = (uint64_t)(uintptr_t)pending;
+    regs[RCX] = regs[RIP];
+    regs[RIP] = (uint64_t)(uintptr_t)pathlog_syscall_wrapper;
+}
+
+static void wrap_pathlog_syscall(uint64_t* regs)
+{
+    struct uelf_path_log_entry* pending = 0;
+    uint64_t td = regs[RDI];
+
     if(regs[RAX] == (uint64_t)&sysents[SYS_open]
 #ifndef FREEBSD
     || regs[RAX] == (uint64_t)&sysents_ps4[SYS_open]
@@ -40,7 +50,9 @@ static void log_path_syscall(uint64_t* regs)
     {
         struct open_args args;
         if(!copy_from_kernel(&args, regs[RSI], sizeof(args)))
-            log_path_event(UELF_PATH_LOG_KIND_OPEN, (uint64_t)(uintptr_t)args.path);
+            pending = prepare_pathlog_event(
+                td, UELF_PATH_LOG_KIND_OPEN, (uint64_t)(uintptr_t)args.path, 0,
+                (uint64_t)(uint32_t)args.flags, (uint64_t)(uint32_t)args.mode);
     }
     else if(regs[RAX] == (uint64_t)&sysents[SYS_openat]
 #ifndef FREEBSD
@@ -50,7 +62,9 @@ static void log_path_syscall(uint64_t* regs)
     {
         struct openat_args args;
         if(!copy_from_kernel(&args, regs[RSI], sizeof(args)))
-            log_path_event(UELF_PATH_LOG_KIND_OPENAT, (uint64_t)(uintptr_t)args.path);
+            pending = prepare_pathlog_event(
+                td, UELF_PATH_LOG_KIND_OPENAT, (uint64_t)(uintptr_t)args.path, 0,
+                (uint64_t)(int64_t)args.fd, (uint64_t)(uint32_t)args.flag);
     }
     else if(regs[RAX] == (uint64_t)&sysents[SYS_stat]
 #ifndef FREEBSD
@@ -60,7 +74,8 @@ static void log_path_syscall(uint64_t* regs)
     {
         struct stat_args args;
         if(!copy_from_kernel(&args, regs[RSI], sizeof(args)))
-            log_path_event(UELF_PATH_LOG_KIND_STAT, (uint64_t)(uintptr_t)args.path);
+            pending = prepare_pathlog_event(
+                td, UELF_PATH_LOG_KIND_STAT, (uint64_t)(uintptr_t)args.path, 0, 0, 0);
     }
     else if(regs[RAX] == (uint64_t)&sysents[SYS_lstat]
 #ifndef FREEBSD
@@ -70,7 +85,8 @@ static void log_path_syscall(uint64_t* regs)
     {
         struct lstat_args args;
         if(!copy_from_kernel(&args, regs[RSI], sizeof(args)))
-            log_path_event(UELF_PATH_LOG_KIND_LSTAT, (uint64_t)(uintptr_t)args.path);
+            pending = prepare_pathlog_event(
+                td, UELF_PATH_LOG_KIND_LSTAT, (uint64_t)(uintptr_t)args.path, 0, 0, 0);
     }
     else if(regs[RAX] == (uint64_t)&sysents[SYS_nstat]
 #ifndef FREEBSD
@@ -80,20 +96,201 @@ static void log_path_syscall(uint64_t* regs)
     {
         struct nstat_args args;
         if(!copy_from_kernel(&args, regs[RSI], sizeof(args)))
-            log_path_event(UELF_PATH_LOG_KIND_NSTAT, (uint64_t)(uintptr_t)args.path);
+            pending = prepare_pathlog_event(
+                td, UELF_PATH_LOG_KIND_NSTAT, (uint64_t)(uintptr_t)args.path, 0, 0, 0);
     }
-    else
+    else if(regs[RAX] == (uint64_t)&sysents[SYS_fstatat]
+#ifndef FREEBSD
+         || regs[RAX] == (uint64_t)&sysents_ps4[SYS_fstatat]
+#endif
+    )
     {
         struct fstatat_args args;
         if(!copy_from_kernel(&args, regs[RSI], sizeof(args)))
-            log_path_event(UELF_PATH_LOG_KIND_FSTATAT, (uint64_t)(uintptr_t)args.path);
+            pending = prepare_pathlog_event(
+                td, UELF_PATH_LOG_KIND_FSTATAT, (uint64_t)(uintptr_t)args.path, 0,
+                (uint64_t)(int64_t)args.fd, (uint64_t)(uint32_t)args.flag);
     }
+    else if(regs[RAX] == (uint64_t)&sysents[SYS_access]
+#ifndef FREEBSD
+         || regs[RAX] == (uint64_t)&sysents_ps4[SYS_access]
+#endif
+    )
+    {
+        struct access_args args;
+        if(!copy_from_kernel(&args, regs[RSI], sizeof(args)))
+            pending = prepare_pathlog_event(
+                td, UELF_PATH_LOG_KIND_ACCESS, (uint64_t)(uintptr_t)args.path, 0,
+                (uint64_t)(uint32_t)args.flags, 0);
+    }
+    else if(regs[RAX] == (uint64_t)&sysents[SYS_faccessat]
+#ifndef FREEBSD
+         || regs[RAX] == (uint64_t)&sysents_ps4[SYS_faccessat]
+#endif
+    )
+    {
+        struct faccessat_args args;
+        if(!copy_from_kernel(&args, regs[RSI], sizeof(args)))
+            pending = prepare_pathlog_event(
+                td, UELF_PATH_LOG_KIND_FACCESSAT, (uint64_t)(uintptr_t)args.path, 0,
+                (uint64_t)(int64_t)args.fd,
+                ((uint64_t)(uint32_t)args.flag << 32) | (uint32_t)args.mode);
+    }
+    else if(regs[RAX] == (uint64_t)&sysents[SYS_readlink]
+#ifndef FREEBSD
+         || regs[RAX] == (uint64_t)&sysents_ps4[SYS_readlink]
+#endif
+    )
+    {
+        struct readlink_args args;
+        if(!copy_from_kernel(&args, regs[RSI], sizeof(args)))
+            pending = prepare_pathlog_event(
+                td, UELF_PATH_LOG_KIND_READLINK, (uint64_t)(uintptr_t)args.path, 0,
+                (uint64_t)args.count, 0);
+    }
+    else if(regs[RAX] == (uint64_t)&sysents[SYS_readlinkat]
+#ifndef FREEBSD
+         || regs[RAX] == (uint64_t)&sysents_ps4[SYS_readlinkat]
+#endif
+    )
+    {
+        struct readlinkat_args args;
+        if(!copy_from_kernel(&args, regs[RSI], sizeof(args)))
+            pending = prepare_pathlog_event(
+                td, UELF_PATH_LOG_KIND_READLINKAT, (uint64_t)(uintptr_t)args.path, 0,
+                (uint64_t)(int64_t)args.fd, (uint64_t)args.bufsize);
+    }
+    else if(regs[RAX] == (uint64_t)&sysents[SYS_mkdir]
+#ifndef FREEBSD
+         || regs[RAX] == (uint64_t)&sysents_ps4[SYS_mkdir]
+#endif
+    )
+    {
+        struct mkdir_args args;
+        if(!copy_from_kernel(&args, regs[RSI], sizeof(args)))
+            pending = prepare_pathlog_event(
+                td, UELF_PATH_LOG_KIND_MKDIR, (uint64_t)(uintptr_t)args.path, 0,
+                (uint64_t)(uint32_t)args.mode, 0);
+    }
+    else if(regs[RAX] == (uint64_t)&sysents[SYS_mkdirat]
+#ifndef FREEBSD
+         || regs[RAX] == (uint64_t)&sysents_ps4[SYS_mkdirat]
+#endif
+    )
+    {
+        struct mkdirat_args args;
+        if(!copy_from_kernel(&args, regs[RSI], sizeof(args)))
+            pending = prepare_pathlog_event(
+                td, UELF_PATH_LOG_KIND_MKDIRAT, (uint64_t)(uintptr_t)args.path, 0,
+                (uint64_t)(int64_t)args.fd, (uint64_t)(uint32_t)args.mode);
+    }
+    else if(regs[RAX] == (uint64_t)&sysents[SYS_unlink]
+#ifndef FREEBSD
+         || regs[RAX] == (uint64_t)&sysents_ps4[SYS_unlink]
+#endif
+    )
+    {
+        struct unlink_args args;
+        if(!copy_from_kernel(&args, regs[RSI], sizeof(args)))
+            pending = prepare_pathlog_event(
+                td, UELF_PATH_LOG_KIND_UNLINK, (uint64_t)(uintptr_t)args.path, 0, 0, 0);
+    }
+    else if(regs[RAX] == (uint64_t)&sysents[SYS_unlinkat]
+#ifndef FREEBSD
+         || regs[RAX] == (uint64_t)&sysents_ps4[SYS_unlinkat]
+#endif
+    )
+    {
+        struct unlinkat_args args;
+        if(!copy_from_kernel(&args, regs[RSI], sizeof(args)))
+            pending = prepare_pathlog_event(
+                td, UELF_PATH_LOG_KIND_UNLINKAT, (uint64_t)(uintptr_t)args.path, 0,
+                (uint64_t)(int64_t)args.fd, (uint64_t)(uint32_t)args.flag);
+    }
+    else if(regs[RAX] == (uint64_t)&sysents[SYS_rename]
+#ifndef FREEBSD
+         || regs[RAX] == (uint64_t)&sysents_ps4[SYS_rename]
+#endif
+    )
+    {
+        struct rename_args args;
+        if(!copy_from_kernel(&args, regs[RSI], sizeof(args)))
+            pending = prepare_pathlog_event(
+                td, UELF_PATH_LOG_KIND_RENAME,
+                (uint64_t)(uintptr_t)args.from, (uint64_t)(uintptr_t)args.to, 0, 0);
+    }
+    else if(regs[RAX] == (uint64_t)&sysents[SYS_renameat]
+#ifndef FREEBSD
+         || regs[RAX] == (uint64_t)&sysents_ps4[SYS_renameat]
+#endif
+    )
+    {
+        struct renameat_args args;
+        if(!copy_from_kernel(&args, regs[RSI], sizeof(args)))
+            pending = prepare_pathlog_event(
+                td, UELF_PATH_LOG_KIND_RENAMEAT,
+                (uint64_t)(uintptr_t)args.old, (uint64_t)(uintptr_t)args.new,
+                (uint64_t)(int64_t)args.oldfd, (uint64_t)(int64_t)args.newfd);
+    }
+    else if(regs[RAX] == (uint64_t)&sysents[SYS_link]
+#ifndef FREEBSD
+         || regs[RAX] == (uint64_t)&sysents_ps4[SYS_link]
+#endif
+    )
+    {
+        struct link_args args;
+        if(!copy_from_kernel(&args, regs[RSI], sizeof(args)))
+            pending = prepare_pathlog_event(
+                td, UELF_PATH_LOG_KIND_LINK,
+                (uint64_t)(uintptr_t)args.path, (uint64_t)(uintptr_t)args.link, 0, 0);
+    }
+    else if(regs[RAX] == (uint64_t)&sysents[SYS_linkat]
+#ifndef FREEBSD
+         || regs[RAX] == (uint64_t)&sysents_ps4[SYS_linkat]
+#endif
+    )
+    {
+        struct linkat_args args;
+        if(!copy_from_kernel(&args, regs[RSI], sizeof(args)))
+            pending = prepare_pathlog_event(
+                td, UELF_PATH_LOG_KIND_LINKAT,
+                (uint64_t)(uintptr_t)args.path1, (uint64_t)(uintptr_t)args.path2,
+                (uint64_t)(int64_t)args.fd1, (uint64_t)(int64_t)args.fd2);
+    }
+    else if(regs[RAX] == (uint64_t)&sysents[SYS_symlink]
+#ifndef FREEBSD
+         || regs[RAX] == (uint64_t)&sysents_ps4[SYS_symlink]
+#endif
+    )
+    {
+        struct symlink_args args;
+        if(!copy_from_kernel(&args, regs[RSI], sizeof(args)))
+            pending = prepare_pathlog_event(
+                td, UELF_PATH_LOG_KIND_SYMLINK,
+                (uint64_t)(uintptr_t)args.path, (uint64_t)(uintptr_t)args.link, 0, 0);
+    }
+    else if(regs[RAX] == (uint64_t)&sysents[SYS_symlinkat]
+#ifndef FREEBSD
+         || regs[RAX] == (uint64_t)&sysents_ps4[SYS_symlinkat]
+#endif
+    )
+    {
+        struct symlinkat_args args;
+        if(!copy_from_kernel(&args, regs[RSI], sizeof(args)))
+            pending = prepare_pathlog_event(
+                td, UELF_PATH_LOG_KIND_SYMLINKAT,
+                (uint64_t)(uintptr_t)args.path1, (uint64_t)(uintptr_t)args.path2,
+                (uint64_t)(int64_t)args.fd, 0);
+    }
+    if(pending)
+        arm_pathlog_wrapper(regs, pending);
 }
 #endif
 
 void handle_syscall(uint64_t* regs, int allow_kekcall)
 {
     const uint64_t syscall_extra = (FWVER >= 0x1000 ? 0x10 : 0);
+    uint16_t pathlog_kind = 0;
 #define IS_PPR(which) (regs[RAX] == (uint64_t)&sysents[SYS_##which])
 #ifdef FREEBSD
 #define IS_PS4(which) 0
@@ -124,13 +321,51 @@ void handle_syscall(uint64_t* regs, int allow_kekcall)
     else
     {
 #if KSTUFF_PATHLOG
-        if(IS(open)
-        || IS(openat)
-        || IS(stat)
-        || IS(lstat)
-        || IS(nstat)
-        || IS(fstatat))
-            log_path_syscall(regs);
+        if(IS(open))
+            pathlog_kind = UELF_PATH_LOG_KIND_OPEN;
+        else if(IS(openat))
+            pathlog_kind = UELF_PATH_LOG_KIND_OPENAT;
+        else if(IS(stat))
+            pathlog_kind = UELF_PATH_LOG_KIND_STAT;
+        else if(IS(lstat))
+            pathlog_kind = UELF_PATH_LOG_KIND_LSTAT;
+        else if(IS(nstat))
+            pathlog_kind = UELF_PATH_LOG_KIND_NSTAT;
+        else if(IS(fstatat))
+            pathlog_kind = UELF_PATH_LOG_KIND_FSTATAT;
+        else if(IS(access))
+            pathlog_kind = UELF_PATH_LOG_KIND_ACCESS;
+        else if(IS(faccessat))
+            pathlog_kind = UELF_PATH_LOG_KIND_FACCESSAT;
+        else if(IS(readlink))
+            pathlog_kind = UELF_PATH_LOG_KIND_READLINK;
+        else if(IS(readlinkat))
+            pathlog_kind = UELF_PATH_LOG_KIND_READLINKAT;
+        else if(IS(mkdir))
+            pathlog_kind = UELF_PATH_LOG_KIND_MKDIR;
+        else if(IS(mkdirat))
+            pathlog_kind = UELF_PATH_LOG_KIND_MKDIRAT;
+        else if(IS(unlink))
+            pathlog_kind = UELF_PATH_LOG_KIND_UNLINK;
+        else if(IS(unlinkat))
+            pathlog_kind = UELF_PATH_LOG_KIND_UNLINKAT;
+        else if(IS(rename))
+            pathlog_kind = UELF_PATH_LOG_KIND_RENAME;
+        else if(IS(renameat))
+            pathlog_kind = UELF_PATH_LOG_KIND_RENAMEAT;
+        else if(IS(link))
+            pathlog_kind = UELF_PATH_LOG_KIND_LINK;
+        else if(IS(linkat))
+            pathlog_kind = UELF_PATH_LOG_KIND_LINKAT;
+        else if(IS(symlink))
+            pathlog_kind = UELF_PATH_LOG_KIND_SYMLINK;
+        else if(IS(symlinkat))
+            pathlog_kind = UELF_PATH_LOG_KIND_SYMLINKAT;
+
+        if(allow_kekcall
+        && pathlog_kind
+        && pathlog_should_wrap_syscall(regs[RDI], pathlog_kind))
+            wrap_pathlog_syscall(regs);
 #endif
 #ifndef FREEBSD
         if(IS(execve)

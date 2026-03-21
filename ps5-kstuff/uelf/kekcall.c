@@ -106,6 +106,39 @@ int handle_kekcall(uint64_t* regs, uint64_t* args, uint32_t nr)
         return ENOSYS;
 #endif
     }
+    else if(nr == 9)
+    {
+#if KSTUFF_PATHLOG
+        int err = set_path_log_event_mask(args[RDI]);
+        if(!err)
+            args[RAX] = 0;
+        return err;
+#else
+        return ENOSYS;
+#endif
+    }
+    else if(nr == 10)
+    {
+#if KSTUFF_PATHLOG
+        int err = set_path_log_pid_filter(args[RDI]);
+        if(!err)
+            args[RAX] = 0;
+        return err;
+#else
+        return ENOSYS;
+#endif
+    }
+    else if(nr == 11)
+    {
+#if KSTUFF_PATHLOG
+        int err = copy_path_log_delta(args[RDI], args[RSI], args[RDX]);
+        if(!err)
+            args[RAX] = 0;
+        return err;
+#else
+        return ENOSYS;
+#endif
+    }
    else if(nr == 0xffffffff)
     {
         args[RAX] = 0;

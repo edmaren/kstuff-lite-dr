@@ -1,21 +1,8 @@
 #pragma once
+
 #include <stddef.h>
 #include <stdint.h>
 
-#ifndef KSTUFF_PATHLOG
-#define KSTUFF_PATHLOG 0
-#endif
-
-enum
-{
-#if KSTUFF_PATHLOG
-    UELF_SHARED_AREA_SIZE = 65536,
-#else
-    UELF_SHARED_AREA_SIZE = 4096,
-#endif
-};
-
-#if KSTUFF_PATHLOG
 enum
 {
     UELF_PATH_LOG_ENTRY_COUNT = 100,
@@ -75,6 +62,14 @@ enum
     UELF_PATH_LOG_MASK(UELF_PATH_LOG_KIND_SYMLINK) | \
     UELF_PATH_LOG_MASK(UELF_PATH_LOG_KIND_SYMLINKAT))
 
+#define UELF_PATH_LOG_STABLE_EVENT_MASK ( \
+    UELF_PATH_LOG_MASK(UELF_PATH_LOG_KIND_OPEN) | \
+    UELF_PATH_LOG_MASK(UELF_PATH_LOG_KIND_OPENAT) | \
+    UELF_PATH_LOG_MASK(UELF_PATH_LOG_KIND_STAT) | \
+    UELF_PATH_LOG_MASK(UELF_PATH_LOG_KIND_LSTAT) | \
+    UELF_PATH_LOG_MASK(UELF_PATH_LOG_KIND_NSTAT) | \
+    UELF_PATH_LOG_MASK(UELF_PATH_LOG_KIND_FSTATAT))
+
 struct uelf_path_log_entry
 {
     uint64_t seq;
@@ -119,27 +114,3 @@ _Static_assert(offsetof(struct uelf_path_log_snapshot, entries) == 280, "Unexpec
 _Static_assert(sizeof(struct uelf_path_log_snapshot) == 53080, "Unexpected pathlog snapshot ABI size");
 _Static_assert(offsetof(struct uelf_path_log_delta, entries) == 32, "Unexpected pathlog delta header ABI");
 _Static_assert(sizeof(struct uelf_path_log_delta) == 52832, "Unexpected pathlog delta ABI size");
-#endif
-
-struct uelf_shared_area
-{
-    uint64_t bitmask;
-    uint64_t ready_mask;
-    char pad0[16];
-    char key_data[63][32];
-#if KSTUFF_PATHLOG
-    uint32_t path_log_settings_seq;
-    uint32_t path_log_enabled;
-    uint32_t path_log_filter_length;
-    uint32_t path_log_pid_filter;
-    uint64_t path_log_write_seq;
-    uint64_t path_log_event_mask;
-    uint64_t path_log_dropped_count;
-    char path_log_filter[UELF_PATH_LOG_PATH_MAX];
-    struct uelf_path_log_entry path_log_entries[UELF_PATH_LOG_ENTRY_COUNT];
-#endif
-};
-
-_Static_assert(sizeof(struct uelf_shared_area) <= UELF_SHARED_AREA_SIZE, "shared area too large");
-
-extern struct uelf_shared_area shared_area;

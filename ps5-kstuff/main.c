@@ -775,8 +775,8 @@ int main(void* ds, int a, int b, uintptr_t c, uintptr_t d)
         r0gdb_kmalloc(0x100);
     kmalloc_add_block(KMALLOC_CHUNK_SIZE);
     gdb_remote_syscall("write", 3, 0, (uintptr_t)1, (uintptr_t)"done\n", (uintptr_t)5);
-    uint64_t comparison_table_base = (uint64_t)kmalloc(131072);
-    uint64_t comparison_table = ((comparison_table_base - 1) | 65535) + 1;
+    uint64_t comparison_table_base = (uint64_t)kmalloc(65536 + 65535);
+    uint64_t comparison_table = align_up(comparison_table_base, 65536);
     uint8_t* comparison_table_data = mmap(0, 65536, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANON, -1, 0);
     for(size_t i = 0; i < 256; i++)
         for(size_t j = 0; j < 256; j++)
@@ -784,11 +784,9 @@ int main(void* ds, int a, int b, uintptr_t c, uintptr_t d)
     //trying to copyin the whole 64k at once hangs here for some reason
     for(size_t i = 0; i < 256; i++)
         copyin(comparison_table+256*i, comparison_table_data+256*i, 256);
-    uint64_t shared_area;
-    if(comparison_table - comparison_table_base > UELF_SHARED_AREA_SIZE)
-        shared_area = comparison_table - UELF_SHARED_AREA_SIZE;
-    else
-        shared_area = comparison_table + 65536;
+    // Pathlog can expand the shared area substantially. Keep it independent
+    // from the 64K-aligned comparison table so the allocation cannot overflow.
+    uint64_t shared_area = (uint64_t)kmalloc(UELF_SHARED_AREA_SIZE);
     kmemzero((void*)shared_area, UELF_SHARED_AREA_SIZE);
     uint64_t kernel_dmap = get_dmap_base();
     uint64_t kernel_cr3 = r0gdb_read_cr3();
@@ -947,11 +945,16 @@ int main(void* ds, int a, int b, uintptr_t c, uintptr_t d)
     int major = (major_bcd >> 4) * 10 + (major_bcd & 0xF);
     int minor_dec = (minor_bcd >> 4) * 10 + (minor_bcd & 0xF);
 
-    char msg[64], *p = msg;
+    char msg[128], *p = msg;
 
     // Header
+#if KSTUFF_PATHLOG
+    const char *hdr =
+        "Welcome To Kstuff Lite 1.1-dr-test5-pathlog\nPlayStation 5 FW: ";
+#else
     const char *hdr =
         "Welcome To Kstuff Lite 1.1-dr-test5\nPlayStation 5 FW: ";
+#endif
     while (*hdr) *p++ = *hdr++;
 
     // Major
