@@ -344,7 +344,9 @@ times iret_rcx-iret_rdx-8 db 0
 dq justreturn_bak
 times iret_r8-iret_rcx-8 db 0
 dq return_wrmsr_gsbase+4
-times iret_rip-iret_r8-8 db 0
+times iret_r9-iret_r8-8 db 0
+dq restore_cr3
+times iret_rip-iret_r9-8 db 0
 dq doreti_iret
 dq 0x20
 dq 2
