@@ -1,5 +1,5 @@
-PROSPER0GDB_OPT ?= -O0
-PAYLOAD_OPT ?= -O0
+PROSPER0GDB_OPT ?= -O2
+PAYLOAD_OPT ?= -O2
 
 all: payload.bin prosper0gdb.o
 

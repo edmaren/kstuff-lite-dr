@@ -54,5 +54,10 @@ if [ -z "${PS5_PAYLOAD_SDK:-}" ] || [ ! -d "$PS5_PAYLOAD_SDK" ]; then
     exit 1
 fi
 
+make -C lib clean
+make -C prosper0gdb clean
+make -C ps5-kstuff clean
+make -C ps5-kstuff-ldr clean
+
 make -C ps5-kstuff
 make -C ps5-kstuff-ldr
