@@ -39,6 +39,13 @@ static int errno = 1;
 #define PAGE_SIZE 4096ull
 #endif
 
+static inline void cpu_relax(void)
+{
+    asm volatile("pause");
+}
+
+#define MEM_XFER_CHUNK 256
+
 static int hex2int(char c)
 {
     if(c >= 'a' && c <= 'f')
@@ -663,7 +670,7 @@ int gdbstub_main_loop(struct trap_state* ts, ssize_t* result, int* ern)
         }
         case CMD_M_READ: // read memory
         {
-            unsigned char buf1[32], buf2[64];
+            unsigned char buf1[MEM_XFER_CHUNK], buf2[2 * MEM_XFER_CHUNK];
             unsigned long long addr, size;
             read_hex(o, &addr);
             read_hex(o, &size);
@@ -672,7 +679,7 @@ int gdbstub_main_loop(struct trap_state* ts, ssize_t* result, int* ern)
             start_packet(o);
             while(size > 0)
             {
-                int chk = (size > 32 ? 32 : size);
+                int chk = (size > MEM_XFER_CHUNK ? MEM_XFER_CHUNK : size);
                 if(read_mem(buf1, addr, chk))
                     break;
                 for(int i = 0; i < chk; i++)
@@ -689,14 +696,14 @@ int gdbstub_main_loop(struct trap_state* ts, ssize_t* result, int* ern)
         }
         case CMD_M_WRITE: // write memory
         {
-            unsigned char buf[32];
+            unsigned char buf[MEM_XFER_CHUNK];
             unsigned long long addr, size;
             read_hex(o, &addr);
             read_hex(o, &size);
             int e = 0;
             while(size > 0)
             {
-                int chk = (size > 32 ? 32 : size);
+                int chk = (size > MEM_XFER_CHUNK ? MEM_XFER_CHUNK : size);
                 for(int i = 0; i < chk; i++)
                 {
                     int a = hex2int(pkt_getchar(o));
@@ -922,16 +929,21 @@ void block_sigint(void)
 void* interrupter_thread(void* o)
 {
     block_sigint();
-    fd_set a, b;
-    FD_ZERO(&a);
-    FD_ZERO(&b);
-    FD_SET(gdb_socket, &a);
-    while(select(gdb_socket+1, &a, &b, &b, NULL) <= 0);
+    for(;;)
+    {
+        fd_set a, b;
+        FD_ZERO(&a);
+        FD_ZERO(&b);
+        FD_SET(gdb_socket, &a);
+        if(select(gdb_socket+1, &a, &b, &b, NULL) > 0)
+            break;
+    }
     if(!in_signal_handler)
         kill(getpid(), SIGINT);
 #if defined(__PS4__) && defined(PS5KEK)
     thr_exit(0);
 #endif
+    return NULL;
 }
 
 void start_interrupter_thread(void)
@@ -950,7 +962,8 @@ static mcontext_t* p_mcontext;
 static void signal_handler(int signum, siginfo_t* idc, void* o_uc)
 {
     int tmp_errno = errno;
-    while(__atomic_exchange_n(&in_signal_handler, 1, __ATOMIC_ACQUIRE));
+    while(__atomic_exchange_n(&in_signal_handler, 1, __ATOMIC_ACQUIRE))
+        cpu_relax();
     ucontext_t* uc = (ucontext_t*)o_uc;
 #ifdef __PS4__
     mcontext_t* mc = (mcontext_t*)(((char*)&uc->uc_mcontext)+48); // wtf??
@@ -1067,7 +1080,8 @@ static void signal_handler(int signum, siginfo_t* idc, void* o_uc)
 
 long gdb_remote_syscall(const char* name, int nargs, int* ern, ...)
 {
-    while(__atomic_exchange_n(&in_signal_handler, 1, __ATOMIC_ACQUIRE));
+    while(__atomic_exchange_n(&in_signal_handler, 1, __ATOMIC_ACQUIRE))
+        cpu_relax();
     pkt_opaque o;
     start_packet(o);
     PKT_PUTS(o, "F");

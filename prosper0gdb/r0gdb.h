@@ -23,10 +23,10 @@ void r0gdb_setup(int do_swapgs);
 void run_in_kernel(struct regs*);
 
 //set up for trace capture
-void r0gdb_trace(size_t trace_size);
+int r0gdb_trace(size_t trace_size);
 
 //set up for instrumentation
-void r0gdb_instrument(size_t trace_size);
+int r0gdb_instrument(size_t trace_size);
 
 //call from kernel gdb to exit
 void r0gdb_exit(void);

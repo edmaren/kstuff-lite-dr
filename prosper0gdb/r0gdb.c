@@ -16,7 +16,9 @@
 #include <sys/thr.h>
 #include <machine/sysarch.h>
 #include <signal.h>
+#include <errno.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <netinet/ip6.h>
 #include "r0gdb.h"
 #include "offsets.h"
@@ -47,6 +49,11 @@ static int master_fd;
 static int victim_fd;
 static uintptr_t victim_pktopts;
 uintptr_t kdata_base;
+
+static inline void cpu_relax(void)
+{
+    asm volatile("pause");
+}
 
 static void* malloc(size_t size)
 {
@@ -381,7 +388,8 @@ static void r0gdb_loop(void)
     ts.regs.eflags = 0x102;
     for(;;)
     {
-        while(__atomic_exchange_n(&in_signal_handler, 1, __ATOMIC_ACQUIRE));
+        while(__atomic_exchange_n(&in_signal_handler, 1, __ATOMIC_ACQUIRE))
+            cpu_relax();
         gdbstub_main_loop(&ts, 0, 0);
         __atomic_exchange_n(&in_signal_handler, 0, __ATOMIC_RELEASE);
         ts.regs.eflags &= ~0x200;
@@ -507,8 +515,9 @@ uint64_t trace_end;
 void(*trace_prog)(uint64_t*);
 extern char ret2trace[];
 static uint64_t uretframe_for_trace[5];
+static int trace_ready;
 
-void r0gdb_trace(size_t trace_size)
+int r0gdb_trace(size_t trace_size)
 {
     static int tracing;
     if(!tracing)
@@ -517,9 +526,14 @@ void r0gdb_trace(size_t trace_size)
         bind_to_some_cpu(0);
         r0gdb_wrmsr(0xc0000084, r0gdb_rdmsr(0xc0000084) & -0x101);
         char* stack = mmap(0, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANON, -1, 0);
-        mlock(stack, 16384);
+        if(stack == MAP_FAILED)
+            goto fail_trace_setup;
         stack[0] = 1;
-        mlock(stack, 16384);
+        if(mlock(stack, 16384))
+        {
+            munmap(stack, 16384);
+            goto fail_trace_setup;
+        }
         /*uint64_t urf[5] = {(uintptr_t)ret2trace, 0x43, 2, (uintptr_t)stack+16384, 0x3b};
         copyin(uretframe, urf, sizeof(urf));*/
         uretframe_for_trace[0] = (uintptr_t)ret2trace;
@@ -527,19 +541,48 @@ void r0gdb_trace(size_t trace_size)
         uretframe_for_trace[2] = 2;
         uretframe_for_trace[3] = (uintptr_t)stack + 16384;
         uretframe_for_trace[4] = 0x3b;
-        copyin(uretframe, uretframe_for_trace, sizeof(uretframe_for_trace));
+        if(copyin(uretframe, uretframe_for_trace, sizeof(uretframe_for_trace)) != sizeof(uretframe_for_trace))
+        {
+            munmap(stack, 16384);
+            goto fail_trace_setup;
+        }
         tracing = 1;
+        trace_ready = 1;
     }
     char* tracebuf = 0;
     if(trace_size)
+    {
         tracebuf = mmap(0, trace_size, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANON, -1, 0);
-    mlock(tracebuf, trace_size);
+        if(tracebuf == MAP_FAILED)
+        {
+            trace_base = 0;
+            trace_start = 0;
+            trace_end = 0;
+            return -1;
+        }
+    }
     for(size_t i = 0; i < trace_size; i += 4096)
-        tracebuf[i] = (uint8_t)i;
-    mlock(tracebuf, trace_size);
+        tracebuf[i] = 0;
+    if(trace_size && mlock(tracebuf, trace_size))
+    {
+        munmap(tracebuf, trace_size);
+        trace_base = 0;
+        trace_start = 0;
+        trace_end = 0;
+        return -1;
+    }
     trace_base = (uint64_t)tracebuf;
     trace_start = trace_base;
     trace_end = trace_base + trace_size;
+    return 0;
+
+fail_trace_setup:
+    trace_ready = 0;
+    uretframe_for_trace[0] = 0;
+    trace_base = 0;
+    trace_start = 0;
+    trace_end = 0;
+    return -1;
 }
 
 void r0gdb_trace_reset(void)
@@ -563,6 +606,11 @@ int r0gdb_open_socket(const char* ipaddr, int port)
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     if(sock < 0)
         return -1;
+    int one = 1;
+#ifdef SO_NOSIGPIPE
+    setsockopt(sock, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+#endif
+    setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
     struct sockaddr_in conn = {
         .sin_family = AF_INET,
         .sin_addr = { .s_addr = ip },
@@ -582,6 +630,8 @@ int r0gdb_sendall(int sock, const void* data, size_t sz)
     while(sz)
     {
         ssize_t chk = write(sock, p, sz);
+        if(chk < 0 && errno == EINTR)
+            continue;
         if(chk <= 0)
             return -1;
         p += chk;
@@ -603,7 +653,7 @@ int r0gdb_sendfile(int fd1, int fd2)
         if(offset != chk)
             return -1;
     }
-    return 0;
+    return chk < 0 ? -1 : 0;
 }
 
 int r0gdb_trace_send(const char* ipaddr, int port)
@@ -623,27 +673,32 @@ static void clear_tf(int sig, siginfo_t* s, void* o_uc)
     mc->mc_rflags &= -257;
 }
 
-void r0gdb_instrument(size_t size)
+int r0gdb_instrument(size_t size)
 {
     static int instrumented = 0;
     if(instrumented)
-        return;
-    r0gdb_trace(size);
+        return 0;
+    if(r0gdb_trace(size))
+        return -1;
     struct sigaction sa = {
         .sa_sigaction = clear_tf,
         .sa_flags = SA_SIGINFO
     };
     sigaction(SIGTRAP, &sa, 0);
     instrumented = 1;
+    return 0;
 }
 
 void kmemcpy(void* dst, const void* src, size_t sz);
 
-static void set_trace(void)
+static int set_trace(void)
 {
+    if(!trace_ready || !uretframe_for_trace[0])
+        return -1;
     kmemcpy((void*)uretframe, uretframe_for_trace, sizeof(uretframe_for_trace));
     uint64_t q;
     asm volatile("pop %0\npushfq\norb $1, 1(%%rsp)\npopfq\npush %0":"=r"(q));
+    return 0;
 }
 
 /*static int count = 0;
@@ -828,10 +883,15 @@ static void fix_mprotect(uint64_t* regs)
 
 int mprotect20(void* addr, size_t sz, int prot)
 {
-    r0gdb_instrument(0);
+    if(r0gdb_instrument(0))
+        return -1;
     int(*p_mprotect)(void*, size_t, int) = WRAPPER(mprotect);
     trace_prog = fix_mprotect;
-    set_trace();
+    if(set_trace())
+    {
+        trace_prog = 0;
+        return -1;
+    }
     int ans = p_mprotect(addr, sz, prot);
     trace_prog = 0;
     return ans;
@@ -904,12 +964,17 @@ uint64_t r0gdb_kfncall(uint64_t fn, ...)
         fncall_args[i] = va_arg(args, uint64_t);
     va_end(args);
     fncall_fn = fn;
-    r0gdb_instrument(0);
+    if(r0gdb_instrument(0))
+        return 0;
     void(*p_getpid)(void) = WRAPPER(getpid);
     trace_prog = getpid_to_fncall;
     if(!sys_getpid)
         kmemcpy(&sys_getpid, (void*)(offsets.sysents + 48*SYS_getpid + 8), 8);
-    set_trace();
+    if(set_trace())
+    {
+        trace_prog = 0;
+        return 0;
+    }
     p_getpid();
     return fncall_ans;
 }
@@ -970,7 +1035,8 @@ static int count_instrs(void(*fn)(), uint64_t arg1, uint64_t arg2, uint64_t arg3
     instr_start = entry;
     instr_jump = jump ? jump : entry;
     instrs_left = instrs;
-    set_trace();
+    if(set_trace())
+        return -1;
     fn(arg1, arg2, arg3);
     return (trace_start-trace_base)/168;
 }
