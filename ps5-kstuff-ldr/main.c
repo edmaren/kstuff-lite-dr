@@ -162,9 +162,7 @@ static int bind_mount_all_titles(const char* path) {
 }
 
 static int scan_and_mount_titles(void) {
-    const char* marker = automount_disabled_marker();
-
-    if (marker) {
+    if (automount_disabled()) {
         return 0;
     }
 
