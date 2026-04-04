@@ -964,7 +964,7 @@ int main(void* ds, int a, int b, uintptr_t c, uintptr_t d)
 
     // Header
     const char *hdr =
-        "Welcome To Kstuff Lite 1.1-dr\nPlayStation 5 FW: ";
+        "Welcome To Kstuff Lite 1.2-dr-test1\nPlayStation 5 FW: ";
     while (*hdr) *p++ = *hdr++;
 
     // Major
