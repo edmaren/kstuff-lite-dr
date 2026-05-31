@@ -84,4 +84,8 @@ struct RifCmd56MemoryLayout
 
 int try_handle_npdrm_mailbox(uint64_t *regs, uint64_t lr);
 void handle_ioctl_syscall(uint64_t *regs);
+#if KSTUFF_OBS
 void finish_npdrm_ioctl_state(void);
+#else
+static inline void finish_npdrm_ioctl_state(void) {}
+#endif

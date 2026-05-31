@@ -48,10 +48,8 @@ static inline uint64_t uelf_rdtsc(void)
     METRIC_MAX(max_field, _metric_elapsed); \
 } while(0)
 #else
-#define METRIC_TIME_START(var) uint64_t var __attribute__((unused)) = 0
-#define METRIC_TIME(total_field, max_field, start_cycles) do { \
-    (void)(start_cycles); \
-} while(0)
+#define METRIC_TIME_START(var) enum { var = 0 }
+#define METRIC_TIME(total_field, max_field, start_cycles) do { } while(0)
 #endif
 
 static inline int kpeek64_checked(uintptr_t kptr, uint64_t* value)

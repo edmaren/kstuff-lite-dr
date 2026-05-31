@@ -5,6 +5,7 @@
 #include "utils.h"
 
 #if KSTUFF_OBS
+#if KSTUFF_OBS
 static struct
 {
     enum kstuff_syscall_tag tag;
@@ -364,4 +365,6 @@ int copy_shared_area_snapshot(uint64_t dst, uint64_t sz)
     (void)sz;
     return ENOSYS;
 }
+#endif
+
 #endif

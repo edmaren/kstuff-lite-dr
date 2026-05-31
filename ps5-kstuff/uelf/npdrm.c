@@ -31,12 +31,12 @@ static struct
 } s_current_ioctl_state;
 #endif
 
+#if KSTUFF_OBS
 void finish_npdrm_ioctl_state(void)
 {
-#if KSTUFF_OBS
     s_current_ioctl_state.valid = 0;
-#endif
 }
+#endif
 
 static struct
 {
