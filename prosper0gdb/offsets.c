@@ -51,6 +51,11 @@ extern uint64_t kdata_base;
 #include "offsets/11_40.h"
 #include "offsets/11_60.h"
 #include "offsets/12_00.h"
+#include "offsets/12_02.h"
+#include "offsets/12_20.h"
+#include "offsets/12_40.h"
+#include "offsets/12_60.h"
+#include "offsets/12_70.h"
 
 void* dlsym(void*, const char*);
 
@@ -101,6 +106,12 @@ int set_offsets(void)
     case 0x1140: set_offsets_1140(); break;
     case 0x1160: set_offsets_1160(); break;
     case 0x1200: set_offsets_1200(); break;
+    case 0x1202: set_offsets_1202(); break;
+    case 0x1220: set_offsets_1220(); break;
+    case 0x1240: set_offsets_1240(); break;
+    case 0x1260: set_offsets_1260(); break;
+    case 0x1270: set_offsets_1270(); break;
+
 #endif
     default: return -1;
     }
