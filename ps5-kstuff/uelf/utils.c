@@ -455,7 +455,7 @@ void handle_utils_trap(uint64_t* regs, uint32_t trapno)
         uint64_t stack_frame[12];
         if(peek_stack_checked(regs, stack_frame, sizeof(stack_frame)))
             return;
-        if(restore_dbgregs_state_checked(stack_frame+5, stack_frame[4]))
+        if(restore_dbgregs_state_checked(stack_frame+5, stack_frame[3]))
             return;
         regs[RSP] += sizeof(stack_frame);
         regs[RIP] = stack_frame[11];
