@@ -5,7 +5,6 @@
 #include "utils.h"
 
 #if KSTUFF_OBS
-#if KSTUFF_OBS
 static struct
 {
     enum kstuff_syscall_tag tag;
@@ -102,25 +101,19 @@ static void observe_syscall_metric(enum kstuff_syscall_tag tag, int kind)
     }
 #undef OBS_CASE
 }
-#endif
 
 void log_word(uint64_t word)
 {
-#if KSTUFF_OBS
     uint64_t seq = __atomic_fetch_add(&shared_area.word_log.next_seq, 1, __ATOMIC_RELAXED);
     struct kstuff_word_log_entry* entry = &shared_area.word_log.entries[seq % SHARED_LOG_WORD_CAP];
     __atomic_store_n(&entry->seq, 0, __ATOMIC_RELAXED);
     entry->word = word;
     __atomic_store_n(&entry->seq, seq + 1, __ATOMIC_RELEASE);
     METRIC_INC(log_word_writes);
-#else
-    (void)word;
-#endif
 }
 
 void log_msg(const char* msg)
 {
-#if KSTUFF_OBS
     if(!msg)
         return;
     size_t len = strlen(msg);
@@ -144,14 +137,10 @@ void log_msg(const char* msg)
     spin_unlock_u64(&shared_area.msg_log.write_lock);
     METRIC_INC(log_msg_writes);
     METRIC_ADD(log_msg_bytes, len);
-#else
-    (void)msg;
-#endif
 }
 
 void observe_ioctl_com_emulated(uint64_t com, uint32_t cmd)
 {
-#if KSTUFF_OBS
     spin_lock_u64(&shared_area.ioctl_com_table.write_lock);
     struct kstuff_ioctl_com_entry* entry = find_or_add_ioctl_com_entry_locked(com);
     if(entry)
@@ -165,69 +154,50 @@ void observe_ioctl_com_emulated(uint64_t com, uint32_t cmd)
             entry->cmd6_hits++;
     }
     spin_unlock_u64(&shared_area.ioctl_com_table.write_lock);
-#else
-    (void)com;
-    (void)cmd;
-#endif
 }
 
 void observe_ioctl_com_total(uint64_t com)
 {
-#if KSTUFF_OBS
     struct kstuff_ioctl_com_entry* entry = find_tracked_ioctl_com_entry(com);
     if(entry)
         __atomic_fetch_add(&entry->total_hits, 1, __ATOMIC_RELAXED);
-#else
-    (void)com;
-#endif
 }
 
 void observe_syscall_armed(enum kstuff_syscall_tag tag)
 {
-#if KSTUFF_OBS
     s_current_syscall_state.tag = tag;
     s_current_syscall_state.trap_reported = 0;
     s_current_syscall_state.emu_reported = 0;
     observe_syscall_metric(tag, 0);
-#else
-    (void)tag;
-#endif
 }
 
 void observe_current_syscall_trap(void)
 {
-#if KSTUFF_OBS
     if(s_current_syscall_state.tag != KSTUFF_SYSCALL_NONE
     && !s_current_syscall_state.trap_reported)
     {
         s_current_syscall_state.trap_reported = 1;
         observe_syscall_metric(s_current_syscall_state.tag, 1);
     }
-#endif
 }
 
 void observe_current_syscall_emulated(void)
 {
-#if KSTUFF_OBS
     if(s_current_syscall_state.tag != KSTUFF_SYSCALL_NONE
     && !s_current_syscall_state.emu_reported)
     {
         s_current_syscall_state.emu_reported = 1;
         observe_syscall_metric(s_current_syscall_state.tag, 2);
     }
-#endif
 }
 
 void observe_current_syscall_finish(void)
 {
-#if KSTUFF_OBS
     s_current_syscall_state.tag = KSTUFF_SYSCALL_NONE;
     s_current_syscall_state.trap_reported = 0;
     s_current_syscall_state.emu_reported = 0;
-#endif
 }
 
-#if KSTUFF_OBS
 static int virt2phys_untracked(uint64_t addr, uint64_t* phys, uint64_t* phys_limit)
 {
     uint64_t pml = cr3_phys;
@@ -358,13 +328,5 @@ int copy_shared_area_snapshot(uint64_t dst, uint64_t sz)
         return EFAULT;
     return 0;
 }
-#else
-int copy_shared_area_snapshot(uint64_t dst, uint64_t sz)
-{
-    (void)dst;
-    (void)sz;
-    return ENOSYS;
-}
-#endif
 
 #endif
