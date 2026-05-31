@@ -272,6 +272,11 @@ int main(void) {
         *args->payloadout = patch_app_db();
     }
 
+    if (automount_disabled()) {
+        klog_printf("Automount disabled by /data/.kstuff_noautomount\n");
+        return 0;
+    }
+
     klog_printf("Remounting /system_ex and mounting titles...\n");
     remount_system_ex();
     scan_and_mount_titles();
