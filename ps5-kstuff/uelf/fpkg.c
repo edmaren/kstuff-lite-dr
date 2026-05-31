@@ -156,10 +156,10 @@ static struct crypto_message_result handle_hmac_message(uint64_t msg, const uint
     return result;
 }
 
-static struct crypto_message_result handle_xts_message_run(uint64_t msg, const uint64_t first_msg_data[21],
-                                                           int key_idx,
-                                                           uint64_t bytes_cap, uint64_t* bytes_handled,
-                                                           struct crypto_request_cache* cache)
+static struct crypto_message_result handle_xts_message(uint64_t msg, const uint64_t msg_data[21],
+                                                       int key_idx,
+                                                       uint64_t bytes_cap, uint64_t* bytes_handled,
+                                                       struct crypto_request_cache* cache)
 {
     struct crypto_message_result result = unhandled_crypto_message(msg);
     uint8_t key[32];
@@ -167,34 +167,11 @@ static struct crypto_message_result handle_xts_message_run(uint64_t msg, const u
         return result;
     METRIC_INC(xts_run_messages_total);
 
-    uint64_t src = first_msg_data[2];
-    uint64_t dst = first_msg_data[3];
-    uint64_t start_sector = first_msg_data[4];
-    uint32_t total_sectors = (uint32_t)first_msg_data[1];
-    int is_encrypt = (first_msg_data[0] & 0x800) >> 11;
-    uint64_t cursor = msg;
-
-    while(result.next_msg)
-    {
-        uint64_t next_msg_data[21];
-        if(read_crypto_message(result.next_msg, next_msg_data))
-            break;
-        if(!is_xts_message(next_msg_data))
-            break;
-        uint32_t next_sectors = (uint32_t)next_msg_data[1];
-        if(HANDLE_TO_IDX(next_msg_data[5]) != key_idx
-        || (int)((next_msg_data[0] & 0x800) >> 11) != is_encrypt
-        || next_msg_data[2] != src + ((uint64_t)total_sectors << 12)
-        || next_msg_data[3] != dst + ((uint64_t)total_sectors << 12)
-        || next_msg_data[4] != start_sector + total_sectors
-        || total_sectors > UINT32_MAX - next_sectors)
-            break;
-
-        total_sectors += next_sectors;
-        cursor = result.next_msg;
-        result.next_msg = kpeek64(cursor + 320);
-        result.total_messages++;
-    }
+    uint64_t src = msg_data[2];
+    uint64_t dst = msg_data[3];
+    uint64_t start_sector = msg_data[4];
+    uint32_t total_sectors = (uint32_t)msg_data[1];
+    int is_encrypt = (msg_data[0] & 0x800) >> 11;
 
     uint64_t run_bytes = (uint64_t)total_sectors << 12;
     uint64_t skip_bytes = 0;
@@ -218,9 +195,7 @@ static struct crypto_message_result handle_xts_message_run(uint64_t msg, const u
         }
     }
 
-    result.emulated_messages = result.total_messages;
-    if(result.total_messages > 1)
-        METRIC_ADD(xts_run_coalesced_messages, result.total_messages - 1);
+    result.emulated_messages = 1;
     result.status = 0;
     return result;
 }
@@ -277,7 +252,7 @@ static int handle_crypto_request(uint64_t* regs, uint64_t bytes_handled)
 
         struct crypto_message_result result;
         if(msg_info.kind == CRYPTO_MESSAGE_XTS)
-            result = handle_xts_message_run(msg, msg_data, msg_info.key_idx, bytes_handled, &new_bytes_handled, &s_crypto_request_cache);
+            result = handle_xts_message(msg, msg_data, msg_info.key_idx, bytes_handled, &new_bytes_handled, &s_crypto_request_cache);
         else if(msg_info.kind == CRYPTO_MESSAGE_HMAC)
             result = handle_hmac_message(msg, msg_data, msg_info.key_idx, bytes_handled, &new_bytes_handled, &s_crypto_request_cache);
         else

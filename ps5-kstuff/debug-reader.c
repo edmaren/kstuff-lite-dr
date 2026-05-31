@@ -259,7 +259,6 @@ static void print_metrics(const struct kstuff_metrics* metrics)
     PRINT_FIELD("req", metrics->xts_requests);
     PRINT_FIELD("sectors", metrics->xts_sectors);
     PRINT_FIELD("run_msg", metrics->xts_run_messages_total);
-    PRINT_FIELD("coalesced", metrics->xts_run_coalesced_messages);
     PRINT_FIELD("skipped", metrics->xts_run_skip_sectors);
     PRINT_FIELD("direct_runs", metrics->xts_full_direct_runs);
     PRINT_FIELD("direct_sectors", metrics->xts_full_direct_sectors);
