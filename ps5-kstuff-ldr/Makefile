@@ -26,6 +26,7 @@ else
 endif
 
 CFLAGS += -Wall -Werror
+CPPFLAGS += -Iinclude
 
 all: kstuff.elf
 
@@ -35,8 +36,8 @@ all: kstuff.elf
 payload_bin.c: ../ps5-kstuff/payload.bin
 	xxd -i $^ > $@
 
-kstuff.elf: payload_bin.c main.c sqlite_triggers.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(LOADER_OPT) $(LDFLAGS) -o $@ main.c sqlite_triggers.c -lsqlite3
+kstuff.elf: payload_bin.c main.c sqlite_triggers.c src/shellui_patch.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LOADER_OPT) $(LDFLAGS) -o $@ main.c sqlite_triggers.c src/shellui_patch.c -lsqlite3
 	strip $@
 	
 clean:
@@ -44,4 +45,3 @@ clean:
 
 test: kstuff.elf
 	$(PS5_DEPLOY) -h $(PS5_HOST) -p $(PS5_PORT) $^
-

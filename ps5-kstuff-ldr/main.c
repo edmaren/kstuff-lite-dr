@@ -34,6 +34,7 @@ along with this program; see the file COPYING. If not, see
 #include <machine/param.h>
 #include <ps5/payload.h>
 #include <ps5/klog.h>
+#include "shellui_patch.h"
 #include "payload_bin.c"
 
 int patch_app_db(void);
@@ -271,6 +272,8 @@ int main(void) {
         puts("patching app.db");
         *args->payloadout = patch_app_db();
     }
+
+    start_shellui_patch_thread();
 
     if (automount_disabled()) {
         klog_printf("Automount disabled by /data/.kstuff_noautomount\n");
