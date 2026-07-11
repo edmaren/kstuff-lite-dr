@@ -16,7 +16,8 @@ static struct shellcore_patch shellcore_patches_502_retail[] = {
     {0x1c33c1, "\xe8\xda\x7d\x4c\x00\x31\xc9\xff\xc1\xe9\x24\x02\x00\x00", 14},
     {0x1c35f3, "\x83\xf8\x02\x0f\x43\xc1\xe9\xca\xfb\xff\xff", 11},
     {0x1c30ee, "\xe9\xce\x02\x00\x00", 5},
-    {0x1382470, "\x31\xC0\xC3", 3}, //VR2 Min Fw Check
+    {0x1382470, "\x31\xC0\xC3", 3}, // VR
+    {0x1386840, "\x31\xC0\xC3", 3}, // VR2 Update bypass
     {0x8CEAB6, "\x90\x90\x90\x90\x90", 5}, //disable game error message
     {0x298CDB, "\x90\xE9", 2}, //PS4 Disc Installer Patch 1
     {0x298D58, "\x90\xE9", 2}, //PS5 Disc Installer Patch 1

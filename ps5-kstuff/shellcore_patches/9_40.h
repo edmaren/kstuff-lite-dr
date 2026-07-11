@@ -19,7 +19,8 @@ static struct shellcore_patch shellcore_patches_940_retail[] = {
 
     {0x734710, "\xC3", 1}, // callback to sceRifManagerRegisterActivationCallback
 
-    {0x16A5510, "\x31\xc0\xc3", 3}, // VR2 Min Fw Check
+    {0x16A5510, "\x31\xc0\xc3", 3}, // VR
+    {0x16A9910, "\x31\xc0\xc3", 3}, // VR2 Update bypass
     {0xA8EF16, "\xeb\x03", 2}, // disable game error message
     {0x306CDB, "\x90\xe9", 2}, // PS4 Disc Installer Patch 1
     {0x306D59, "\x90\xe9", 2}, // PS5 Disc Installer Patch 1
