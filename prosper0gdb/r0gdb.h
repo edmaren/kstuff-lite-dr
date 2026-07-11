@@ -28,6 +28,9 @@ int r0gdb_trace(size_t trace_size);
 //set up for instrumentation
 int r0gdb_instrument(size_t trace_size);
 
+//restore IDT entries and TSS IST stacks patched by r0gdb_setup
+void r0gdb_cleanup(void);
+
 //call from kernel gdb to exit
 void r0gdb_exit(void);
 
@@ -79,6 +82,8 @@ uint64_t r0gdb_kmalloc(size_t sz);
 
 //get current firmware version
 uint32_t r0gdb_get_fw_version(void);
+
+uint64_t r0gdb_find_syscall_cfi_table_jmp_int3_addr(void);
 
 /* internals */
 

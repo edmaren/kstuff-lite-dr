@@ -69,6 +69,10 @@ DEF(kernel_pmap_store, 0x3257a78)
 DEF(crypt_singleton_array, 0x2e31830)
 DEF(mov_rax_cr0, -0x9d6ee1)
 DEF(mov_cr0_rax, -0x9d6edc)
+DEF(syscall_cfi_table_jmp_int3, -0x969630)
+
+// non data-relative offsets
+DEF(p_sysent, 0x9C0)
 #include "offset_list.txt"
 END_FW()
 

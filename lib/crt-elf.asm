@@ -1,6 +1,8 @@
 use64
 
 global _start
+global memcpy
+global memset
 extern main
 extern addr__dynlib_dlsym
 extern elf_main
@@ -47,6 +49,20 @@ dq 0
 start3:
 mov [rel addr__dynlib_dlsym], rdi
 jmp main
+
+memcpy:
+mov rax, rdi
+mov rcx, rdx
+rep movsb
+ret
+
+memset:
+movzx eax, sil
+mov rsi, rdi
+mov rcx, rdx
+rep stosb
+mov rax, rsi
+ret
 
 section .data
 _sdata:

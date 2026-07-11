@@ -3,9 +3,11 @@
 
 struct offset_table
 {
-#define OFFSET(x) uint64_t x;
+#define KDATA_OFFSET(x) uint64_t x;
+#define ABSOLUTE_OFFSET(x) int64_t x;
 #include "offsets/offset_list.txt"
-#undef OFFSET
+#undef KDATA_OFFSET
+#undef ABSOLUTE_OFFSET
 };
 
 extern struct offset_table offsets;

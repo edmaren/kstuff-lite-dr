@@ -24,8 +24,8 @@ DEF(mov_rax_cr3, -0x3C957F)
 DEF(cpu_switch, -0xA8ACC0)
 DEF(mprotect_fix_start, -0x9BC843)
 DEF(mprotect_fix_end, mprotect_fix_start+6)
-DEF(aslr_fix_start, -0x901A4B)
-DEF(aslr_fix_end, aslr_fix_start+2)
+DEF(aslr_fix_start, -0x901A4D)
+DEF(aslr_fix_end, aslr_fix_start+4)
 DEF(sysents, 0x1b0b70)
 DEF(sysents_ps4, 0x1a8620)
 DEF(sysentvec, 0xdcbc78)
@@ -69,6 +69,10 @@ DEF(kernel_pmap_store, 0x2e04f18)
 DEF(crypt_singleton_array, 0x2d49d70)
 DEF(mov_rax_cr0, -0xa8ac21)
 DEF(mov_cr0_rax, -0xa8ac1c)
+DEF(syscall_cfi_table_jmp_int3, -0xA24250)
+
+// non data-relative offsets
+DEF(p_sysent, 0xA00)
 #include "offset_list.txt"
 END_FW()
 

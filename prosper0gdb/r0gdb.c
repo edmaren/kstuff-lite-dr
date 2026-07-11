@@ -50,6 +50,23 @@ static int victim_fd;
 static uintptr_t victim_pktopts;
 uintptr_t kdata_base;
 
+void	*memcpy(void * __restrict, const void * __restrict, size_t);
+void	*memset(void *, int, size_t);
+
+static inline int memcmp(const void *s1, const void *s2, size_t n)
+{
+    const unsigned char *p1 = (const unsigned char *)s1;
+    const unsigned char *p2 = (const unsigned char *)s2;
+    for (size_t i = 0; i < n; i++)
+    {
+        if (p1[i] != p2[i])
+        {
+            return (int)p1[i] - (int)p2[i];
+        }
+    }
+    return 0;
+}
+
 static inline void cpu_relax(void)
 {
     asm volatile("pause");
@@ -291,12 +308,19 @@ uint64_t kframe;
 uint64_t uretframe;
 uint64_t iret;
 
+static int init_run = 0;
+static int idt6_patched = 0;
+static char og_idt1[16];
+static char og_idt6[16];
+static char og_idt9[16];
+static char og_idt179[16];
+static uint64_t og_tss[16][3];
+
 extern char _start[];
 extern char _end[];
 
 void r0gdb_setup(int do_swapgs)
 {
-    static int init_run = 0;
     if(init_run)
         return;
     //mlock all our code & data
@@ -323,6 +347,9 @@ void r0gdb_setup(int do_swapgs)
         uint64_t tss_for_cpu = offsets.tss_array + cpu * 0x68;
         char utss[0x68];
         copyout(utss, tss_for_cpu, 0x68);
+        og_tss[cpu][0] = *(volatile uint64_t*)(utss+0x34);
+        og_tss[cpu][1] = *(volatile uint64_t*)(utss+0x3c);
+        og_tss[cpu][2] = *(volatile uint64_t*)(utss+0x4c);
         if(cpu == 13)
             kstack = *(volatile uint64_t*)(utss+0x3c) - 0x28;
         *(volatile uint64_t*)(utss+0x34) = gadget_stack + 0xe0;
@@ -364,15 +391,50 @@ void r0gdb_setup(int do_swapgs)
     gate[9] = addr[5];
     gate[10] = addr[6];
     gate[11] = addr[7];
+    copyout(og_idt1, offsets.idt+1*16, 16);
+    copyout(og_idt9, offsets.idt+9*16, 16);
+    copyout(og_idt179, offsets.idt+179*16, 16);
     copyin(offsets.idt+1*16, gate, 16);
     if(do_swapgs == 2)
+    {
+        copyout(og_idt6, offsets.idt+6*16, 16);
         copyin(offsets.idt+6*16, gate, 16);
+        idt6_patched = 1;
+    }
     gate[4] = 3;
     gate[5] = 0xee;
     copyin(offsets.idt+9*16, gate, 16);
     gate[4] = 6;
     copyin(offsets.idt+179*16, gate, 16);
     init_run = 1;
+}
+
+void r0gdb_cleanup(void)
+{
+    if (!init_run)
+        return;
+    r0gdb_wrmsr(0xc0000084, r0gdb_rdmsr(0xc0000084) | 0x100);
+
+#ifdef CPU_2
+    int cpu = 13;
+#else
+    for(int cpu = 0; cpu < 16; cpu++)
+#endif
+    {
+        uint64_t tss_for_cpu = offsets.tss_array + cpu * 0x68;
+        char utss[0x68];
+        copyout(utss, tss_for_cpu, 0x68);
+        *(volatile uint64_t*)(utss+0x34) = og_tss[cpu][0];
+        *(volatile uint64_t*)(utss+0x3c) = og_tss[cpu][1];
+        *(volatile uint64_t*)(utss+0x4c) = og_tss[cpu][2];
+        copyin(tss_for_cpu, utss, 0x68);
+    }
+
+    copyin(offsets.idt+1*16, og_idt1, 16);
+    if(idt6_patched)
+        copyin(offsets.idt+6*16, og_idt6, 16);
+    copyin(offsets.idt+9*16, og_idt9, 16);
+    copyin(offsets.idt+179*16, og_idt179, 16);
 }
 
 void r0gdb_exit(void)
@@ -1378,6 +1440,136 @@ static void* other_thread_fn(void* arg)
     //((int(*)())dlsym((void*)0x1, "sceKernelSleep"))(10000000);
     for(;;)
         asm volatile("");
+}
+
+static uint64_t syscall_cfi_table_base = 0;
+static void trace_find_syscall_cfi_table_jmp_int3_addr(uint64_t* regs)
+{
+    // trace_frame_size
+    static uint64_t prev_prev_frame[168/8];
+    static uint64_t prev_frame[168/8];
+
+    //                 lea     rcx, syscall_cfi_table_base
+    //                 mov     rax, [rbp+var_80]
+    //
+    // syscall_before:
+    //                 mov     rbx, [rax+8]
+    //                 mov     rax, rbx
+    //                 sub     rax, rcx
+    //                 ror     rax, 3
+    //                 cmp     rax, 37Ah
+    //                 ja      cfi_check_fail
+    //                 lea     rsi, [rbp+args]
+    //                 mov     rdi, r14
+    //                 call    rbx
+
+    SKIP_SCHEDULER
+    if (syscall_cfi_table_base != 0)
+        return;
+
+    if (regs[0] == offsets.syscall_before)
+    {
+        // the syscall_cfi_table_base was loaded into rcx on all fws so far
+        // if this fails then this changed, todo
+        if (prev_prev_frame[6] != prev_frame[6] && // rcx changed
+            (prev_frame[6] < kdata_base && prev_frame[6] > kdata_base - 32 * 1024 * 1024)) // rcx in kernel .text
+            syscall_cfi_table_base = prev_frame[6];
+    }
+
+    memcpy(prev_prev_frame, prev_frame, sizeof(prev_prev_frame));
+    memcpy(prev_frame, regs, sizeof(prev_frame));
+}
+
+uint64_t r0gdb_find_syscall_cfi_table_jmp_int3_addr(void) 
+{
+    if (offsets.syscall_before == kdata_base)
+        return 0;
+
+    if(r0gdb_instrument(0))
+        return 0;
+    int(*p_getppid)() = WRAPPER(getppid);
+    trace_prog = trace_find_syscall_cfi_table_jmp_int3_addr;
+    if(set_trace())
+    {
+        trace_prog = 0;
+        return 0;
+    }
+    p_getppid();
+    trace_prog = 0;
+
+    if (syscall_cfi_table_base == 0)
+        return 0;
+        
+    // make int3 use r0gdb's int1 stuff
+    char og_idt3[16];    
+    copyout(og_idt3, offsets.idt+16*3, sizeof(og_idt3));
+
+    uint64_t int1_handler;
+    copyout(&int1_handler, offsets.idt+16*1, 2);
+    copyout((char*)&int1_handler + 2, offsets.idt+16*1+6, 6);
+    uint8_t int1_ist_index;
+    copyout(&int1_ist_index, offsets.idt+16*1+4, 1);
+    
+    kmemcpy((char*)(offsets.idt+16*3), (char*)&int1_handler, 2);
+    kmemcpy((char*)(offsets.idt+16*3+6), (char*)&int1_handler+2, 6);
+    kmemcpy((char*)(offsets.idt+16*3+4), &int1_ist_index, 1);
+
+    struct regs regs;
+    struct regs regs_before;
+
+    uint64_t syscall_cfi_table_jmp_int3_addr = 0;
+
+    // single step first 500 entries to try and find the jmp to int3
+    for (int i = 0; i < 500; i++)
+    {
+        uint64_t entry_rip = syscall_cfi_table_base + i * 8;
+        
+        // execute jmp of cfi table entry
+        memset(&regs, 0, sizeof(regs));
+        regs.rip = entry_rip;
+        regs.rsp = kstack;
+        regs.eflags = 0x102;
+        run_in_kernel(&regs);
+
+        if ((regs.rip % 16) != 0 || (regs.rip > entry_rip && regs.rip < entry_rip + 15))
+        {
+            // what we have just executed was not a jmp, syscall_cfi_table_base is wrong, bail
+            break;
+        }
+
+        // set arg regs to something valid, in case first instruction is a memory read
+        // although in my kernel i only see push/test/mov imm/int3 as the first instructions in this table
+        regs.rdi = kstack - 0x2000;
+        regs.rsi = kstack - 0x2000;
+        regs.rdx = kstack - 0x2000;
+        regs.rcx = kstack - 0x2000;
+        regs.r8  = kstack - 0x2000;
+        regs.r9  = kstack - 0x2000;
+        regs.rbp = kstack - 0x2000;
+        regs.eflags = 0x102;
+        memcpy(&regs_before, &regs, sizeof(regs));
+
+        // run first instruction
+        run_in_kernel(&regs);
+
+        // assume if no register changed, except for rip increasing by 1, then we hit an int3
+        // there are other instructions that fit this criteria, like nop and hlt, but they realistically wont be here
+        if (regs.rip == regs_before.rip + 1 &&
+            memcmp(&regs, &regs_before, __builtin_offsetof(struct regs, rip)) == 0 &&
+            memcmp((char*)(&regs) + __builtin_offsetof(struct regs, rip) + 8, 
+                   (char*)(&regs_before) + __builtin_offsetof(struct regs, rip) + 8, 
+                   sizeof(regs) - __builtin_offsetof(struct regs, rip) - 8) == 0)
+        {
+            // found it
+            syscall_cfi_table_jmp_int3_addr = entry_rip;
+            break;
+        }
+    }
+
+    // restore int3
+    kmemcpy((char*)(offsets.idt+16*3), og_idt3, sizeof(og_idt3));
+    
+    return syscall_cfi_table_jmp_int3_addr;
 }
 
 int set_offsets(void);

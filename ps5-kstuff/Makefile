@@ -31,16 +31,16 @@ $(BUILD_CONFIG): FORCE
 	printf 'UELF_ARCH=%s\n' "$(UELF_ARCH)" >> "$$tmp"; \
 	if test -f "$@" && cmp -s "$$tmp" "$@"; then rm -f "$$tmp"; else mv "$$tmp" "$@"; fi
 
-../lib/lib-elf-ps5.a:
+../lib/lib-elf-ps5.a: FORCE
 	cd ../lib; $(MAKE)
 
-../prosper0gdb/prosper0gdb.o:
+../prosper0gdb/prosper0gdb.o: FORCE
 	cd ../prosper0gdb; $(MAKE) PROSPER0GDB_OPT="$(PROSPER0GDB_OPT)"
 
 structs.inc: structs-ps5.inc
 	cp structs-ps5.inc structs.inc
 
-payload.elf: ../lib/lib-elf-ps5.a ../prosper0gdb/prosper0gdb.o main.c kelf uelf/uelf.bin $(BUILD_CONFIG)
+payload.elf: ../lib/lib-elf-ps5.a ../prosper0gdb/prosper0gdb.o main.c kelf uelf/uelf.bin $(BUILD_CONFIG) shellcore_patches/*
 	gcc $(PAYLOAD_OPT) -isystem ../freebsd-headers -nostdinc -nostdlib -fno-stack-protector -static ../lib/lib-elf-ps5.a ../prosper0gdb/prosper0gdb.o $(EXTRA_CFLAGS) -DKSTUFF_OBS=$(KSTUFF_OBS) main.c -DPS5KEK ../prosper0gdb/dbg.c -Wl,-gc-sections -o payload.elf -fPIE -ffreestanding -no-pie -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384
 
 payloa%.bin: payloa%.elf

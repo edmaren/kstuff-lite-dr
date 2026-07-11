@@ -2,6 +2,8 @@
 #include <sys/types.h>
 #include <sys/mman.h>
 #include <sys/sysctl.h>
+#include <sys/sysent.h>
+#include <sys/syscall.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdarg.h>
@@ -16,6 +18,8 @@
 #include "uelf/shared_area.h"
 
 void* dlsym(void*, const char*);
+void* memcpy(void * __restrict, const void * __restrict, size_t);
+int (*snprintf)(char * restrict str, size_t size, const char * restrict format, ...);
 
 void notify(const char* s)
 {
@@ -48,6 +52,7 @@ void die(int line)
         q /= 10;
     }
     notify(buf);
+    r0gdb_cleanup();
     asm volatile("ud2");
 }
 
@@ -456,6 +461,10 @@ static uint64_t remote_syscall(int pid, int nr, ...)
 #define SYS_mlock 203
 #define SYS_mdbg_call 573
 #define SYS_dynlib_get_info_ex 608
+#define SYS_dynlib_load_prx 594
+#define SYS_get_self_auth_info 607
+#define SYS_get_sdk_compiled_version 647
+#define SYS_get_ppr_sdk_compiled_version 713
 
 struct module_segment
 {
@@ -745,8 +754,15 @@ uint64_t bench(void)
     return rdtsc() - start;
 }
 
+#define USE_INT3_SYSCALL_HOOK 1
+#define INT13_IST_INDEX 3
+#define INT1_IST_INDEX 4
+#define INT3_IST_INDEX 7
+
 int main(void* ds, int a, int b, uintptr_t c, uintptr_t d)
 {
+    snprintf = dlsym((void*)0x2, "snprintf");
+
     if(r0gdb_init(ds, a, b, c, d))
     {
 #ifndef FIRMWARE_PORTING
@@ -782,12 +798,38 @@ int main(void* ds, int a, int b, uintptr_t c, uintptr_t d)
 #ifdef FIRMWARE_PORTING
     dbg_enter();
 #endif
+
+#ifdef USE_INT3_SYSCALL_HOOK
+    // this jmp to int3 exists because sony fills certain functions with int3 depending on the console type
+    // retails have the most of these redacted functions, testkits less, devkits even less, presumably "DevKit Intdev" has none
+    // the built in offsets are mostly from retail firmwares so for kits we need to find them again
+    int is_kit = sceKernelIsTestKit() || sceKernelIsDevKit();
+    if (offsets.syscall_cfi_table_jmp_int3 == kdata_base || is_kit) {
+        offsets.syscall_cfi_table_jmp_int3 = r0gdb_find_syscall_cfi_table_jmp_int3_addr();
+        if (offsets.syscall_cfi_table_jmp_int3 == 0 || offsets.syscall_cfi_table_jmp_int3 == kdata_base)
+            die();
+
+        // from the 1 fw i checked, everything redacted on kits is also redacted on retails
+        // so kit offsets should work on retails, but to be safe, in case this changes in the future
+        // only report the offset if from a retail console
+        if (!is_kit) {
+            int64_t syscall_cfi_table_jmp_int3_offset = offsets.syscall_cfi_table_jmp_int3 - kdata_base;
+            char log[128];
+            snprintf(log, sizeof(log), "syscall_cfi_table_jmp_int3 offset missing.\nPlease contribute this offset: %s0x%llx", (offsets.syscall_cfi_table_jmp_int3 > kdata_base) ? "+" : "-", (syscall_cfi_table_jmp_int3_offset > 0) ? syscall_cfi_table_jmp_int3_offset : -syscall_cfi_table_jmp_int3_offset);
+            notify(log);
+        }
+    }
+#endif
+
     uint64_t percpu_ist4[NCPUS];
     for(int cpu = 0; cpu < NCPUS; cpu++)
         copyout(&percpu_ist4[cpu], TSS(cpu)+28+4*8, 8);
     uint64_t int1_handler;
     copyout(&int1_handler, IDT+16*1, 2);
     copyout((char*)&int1_handler + 2, IDT+16*1+6, 6);
+    uint64_t int3_handler;
+    copyout(&int3_handler, IDT+16*3, 2);
+    copyout((char*)&int3_handler + 2, IDT+16*3+6, 6);
     uint64_t int13_handler;
     copyout(&int13_handler, IDT+16*13, 2);
     copyout((char*)&int13_handler + 2, IDT+16*13+6, 6);
@@ -825,6 +867,7 @@ int main(void* ds, int a, int b, uintptr_t c, uintptr_t d)
         "comparison_table"+zero,
         "dmem"+zero,
         "int1_handler"+zero,
+        "int3_handler"+zero,
         "int13_handler"+zero,
         ".ist_errc"+zero,
         ".ist_noerrc"+zero,
@@ -835,9 +878,11 @@ int main(void* ds, int a, int b, uintptr_t c, uintptr_t d)
         ".uelf_cr3"+zero,
         ".uelf_entry"+zero,
         ".fwver"+zero,
-#define OFFSET(x) (#x)+zero,
+#define KDATA_OFFSET(x) (#x)+zero,
+#define ABSOLUTE_OFFSET(x) (#x)+zero,
 #include "../prosper0gdb/offsets/offset_list.txt"
-#undef OFFSET
+#undef KDATA_OFFSET
+#undef ABSOLUTE_OFFSET
         0,
     };
 	
@@ -846,6 +891,7 @@ int main(void* ds, int a, int b, uintptr_t c, uintptr_t d)
         comparison_table,      // comparison_table
         dmem_virt_base,        // dmem
         int1_handler,          // int1_handler
+        int3_handler,          // int3_handler
         int13_handler,         // int13_handler
         0x1237,                // .ist_errc
         0x1238,                // .ist_noerrc
@@ -856,9 +902,11 @@ int main(void* ds, int a, int b, uintptr_t c, uintptr_t d)
         0x1235,                // .uelf_cr3
         0x1236,                // .uelf_entry
         fwver,                 // .fwver
-#define OFFSET(x) offsets.x,
+#define KDATA_OFFSET(x) offsets.x,
+#define ABSOLUTE_OFFSET(x) offsets.x,
 #include "../prosper0gdb/offsets/offset_list.txt"
-#undef OFFSET
+#undef KDATA_OFFSET
+#undef ABSOLUTE_OFFSET
         0,
     };
     size_t pcpu_idx, uelf_cr3_idx, uelf_entry_idx, ist_errc_idx, ist_noerrc_idx, ist4_idx, tss_idx;
@@ -895,8 +943,8 @@ int main(void* ds, int a, int b, uintptr_t c, uintptr_t d)
         values[pcpu_idx] = PCPU(cpu, fwver);
         values[uelf_cr3_idx] = 0;
         values[uelf_entry_idx] = 0;
-        values[ist_errc_idx] = TSS(cpu)+28+3*8;
-        values[ist_noerrc_idx] = TSS(cpu)+28+7*8;
+        values[ist_errc_idx] = TSS(cpu)+28+INT13_IST_INDEX*8;
+        values[ist_noerrc_idx] = TSS(cpu)+28+INT1_IST_INDEX*8;
         values[ist4_idx] = percpu_ist4[cpu];
         values[tss_idx] = TSS(cpu);
         void* uelf_entry = 0;
@@ -918,25 +966,144 @@ int main(void* ds, int a, int b, uintptr_t c, uintptr_t d)
     r0gdb_wrmsr(0xc0000084, r0gdb_rdmsr(0xc0000084) | 0x100);
     gdb_remote_syscall("write", 3, 0, (uintptr_t)1, (uintptr_t)"done loading\npatching idt... ", (uintptr_t)29);
     uint64_t cr3 = r0gdb_read_cr3();
-    for(int cpu = 0; cpu < NCPUS; cpu++)
-    {
-        uint64_t entry = kelf_entries[cpu];
-        kmemcpy((char*)IDT+16*13, (char*)entry, 2);
-        kmemcpy((char*)IDT+16*13+6, (char*)entry+2, 6);
-        kmemcpy((char*)IDT+16*13+4, "\x03", 1);
-        kmemcpy((char*)IDT+16*1, (char*)entry+16, 2);
-        kmemcpy((char*)IDT+16*1+6, (char*)entry+18, 6);
-        kmemcpy((char*)IDT+16*1+4, "\x07", 1);
-        kmemcpy((char*)TSS(cpu)+28+3*8, (char*)entry+8, 8);
-        kmemcpy((char*)TSS(cpu)+28+7*8, (char*)entry+24, 8);
-    }
+    
     uint64_t iret = offsets.doreti_iret;
     kmemcpy((char*)(IDT+16*2), (char*)&iret, 2);
     kmemcpy((char*)(IDT+16*2+6), (char*)&iret+2, 6);
+
+    uint64_t entry0 = kelf_entries[0];
+    kmemcpy((char*)IDT+16*13, (char*)entry0, 2);
+    kmemcpy((char*)IDT+16*13+6, (char*)entry0+2, 6);
+    kmemcpy((char*)IDT+16*13+4, &(uint8_t){INT13_IST_INDEX}, 1);
+    kmemcpy((char*)IDT+16*1, (char*)entry0+16, 2);
+    kmemcpy((char*)IDT+16*1+6, (char*)entry0+18, 6);
+    kmemcpy((char*)IDT+16*1+4, &(uint8_t){INT1_IST_INDEX}, 1);
+
+#ifdef USE_INT3_SYSCALL_HOOK
+    kmemcpy((char*)IDT+16*3, (char*)entry0+32, 2);
+    kmemcpy((char*)IDT+16*3+6, (char*)entry0+34, 6);
+    kmemcpy((char*)IDT+16*3+4, &(uint8_t){INT3_IST_INDEX}, 1);
+#endif
+
+    for(int cpu = 0; cpu < NCPUS; cpu++)
+    {
+        uint64_t entry = kelf_entries[cpu];
+        kmemcpy((char*)TSS(cpu)+28+INT13_IST_INDEX*8, (char*)entry+8, 8);
+        kmemcpy((char*)TSS(cpu)+28+INT1_IST_INDEX*8, (char*)entry+24, 8);
+#ifdef USE_INT3_SYSCALL_HOOK
+        kmemcpy((char*)TSS(cpu)+28+INT3_IST_INDEX*8, (char*)entry+40, 8);
+#endif
+    }
+
     //kmemzero((char*)(IDT+16*1), 16);
     gdb_remote_syscall("write", 3, 0, (uintptr_t)1, (uintptr_t)"done\napplying kdata patches... ", (uintptr_t)31);
+
+
+#ifdef USE_INT3_SYSCALL_HOOK
+    static const int syscalls_to_hook_for_ps4[] = {
+        SYS_execve,
+        SYS_dynlib_load_prx,
+        SYS_get_self_auth_info,
+        SYS_get_sdk_compiled_version,
+        SYS_getppid,
+        SYS_mprotect
+    };
+    static const int num_syscalls_to_hook_for_ps4 = sizeof(syscalls_to_hook_for_ps4) / sizeof(syscalls_to_hook_for_ps4[0]);
+
+    static const int syscalls_to_hook_for_ps5[] = {
+        SYS_execve,
+        SYS_dynlib_load_prx,
+        SYS_get_self_auth_info,
+        SYS_get_sdk_compiled_version,
+        SYS_get_ppr_sdk_compiled_version,
+        SYS_getppid,
+        SYS_nmount,
+        SYS_unmount,
+        SYS_mprotect,
+        SYS_mdbg_call
+    };
+    static const int num_syscalls_to_hook_for_ps5 = sizeof(syscalls_to_hook_for_ps5) / sizeof(syscalls_to_hook_for_ps5[0]);
+
+    // ioctl is only used for the npdrm hook, which is only used by shellcore, avoid the overhead of hooking every ioctl for every proc
+    // TODO: handle npdrm hook in userland?
+    static const int extra_syscalls_to_hook_for_shellcore[] = {
+        SYS_ioctl
+    };
+    static const int num_extra_syscalls_to_hook_for_shellcore = sizeof(extra_syscalls_to_hook_for_shellcore) / sizeof(extra_syscalls_to_hook_for_shellcore[0]);
+
+    int ps4_sv_table_size = ((int)kread8(offsets.sysentvec_ps4)) * sizeof(struct sysent);
+    int ps5_sv_table_size = ((int)kread8(offsets.sysentvec)) * sizeof(struct sysent);
+        
+    // avoid writing to sysents directly, make copies and set those in the sysentvec
+    // the uelf needs the og values anyway and this also saves us from needing a primitive to write to rodata
+    char* ps4_sv_table = mmap(0, ps4_sv_table_size, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANON, -1, 0);
+    char* ps5_sv_table = mmap(0, ps5_sv_table_size, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANON, -1, 0);
+    char* shellcore_ps5_sv_table = mmap(0, ps5_sv_table_size, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANON, -1, 0);
+    if (ps4_sv_table == MAP_FAILED || ps5_sv_table == MAP_FAILED || shellcore_ps5_sv_table == MAP_FAILED)
+        die();
+
+    copyout(ps4_sv_table, offsets.sysents_ps4, ps4_sv_table_size);
+    copyout(ps5_sv_table, offsets.sysents, ps5_sv_table_size);
+    
+    for (int i = 0; i < num_syscalls_to_hook_for_ps4; i++)
+    {
+        int syscall = syscalls_to_hook_for_ps4[i];
+        *((uint64_t*)(ps4_sv_table + sizeof(struct sysent) * syscall + __builtin_offsetof(struct sysent, sy_call))) = offsets.syscall_cfi_table_jmp_int3;
+    }
+
+    for (int i = 0; i < num_syscalls_to_hook_for_ps5; i++)
+    {
+        int syscall = syscalls_to_hook_for_ps5[i];
+        *((uint64_t*)(ps5_sv_table + sizeof(struct sysent) * syscall + __builtin_offsetof(struct sysent, sy_call))) = offsets.syscall_cfi_table_jmp_int3;
+    }
+
+    memcpy(shellcore_ps5_sv_table, ps5_sv_table, ps5_sv_table_size);
+    for (int i = 0; i < num_extra_syscalls_to_hook_for_shellcore; i++)
+    {
+        int syscall = extra_syscalls_to_hook_for_shellcore[i];
+        *((uint64_t*)(shellcore_ps5_sv_table + sizeof(struct sysent) * syscall + __builtin_offsetof(struct sysent, sy_call))) = offsets.syscall_cfi_table_jmp_int3;
+    }
+
+    uint64_t fake_ps4_sv_table = (uint64_t)kmalloc(ps4_sv_table_size);
+    uint64_t fake_ps5_sv_table = (uint64_t)kmalloc(ps5_sv_table_size);
+    uint64_t fake_shellcore_ps5_sv_table = (uint64_t)kmalloc(ps5_sv_table_size);
+
+    // this locks up if copied in 1 go
+    for (int i = 0; i < ps4_sv_table_size; i += 0x1000)
+        copyin(fake_ps4_sv_table + i, ps4_sv_table + i, (i + 0x1000 > ps4_sv_table_size) ? (ps4_sv_table_size - i) : 0x1000);
+
+    for (int i = 0; i < ps5_sv_table_size; i += 0x1000)
+        copyin(fake_ps5_sv_table + i, ps5_sv_table + i, (i + 0x1000 > ps5_sv_table_size) ? (ps5_sv_table_size - i) : 0x1000);
+
+    for (int i = 0; i < ps5_sv_table_size; i += 0x1000)
+        copyin(fake_shellcore_ps5_sv_table + i, shellcore_ps5_sv_table + i, (i + 0x1000 > ps5_sv_table_size) ? (ps5_sv_table_size - i) : 0x1000);
+
+    copyin(offsets.sysentvec_ps4 + sv_table, &fake_ps4_sv_table, 8);
+    copyin(offsets.sysentvec + sv_table, &fake_ps5_sv_table, 8);
+
+    char* fake_shellcore_sysentvec = mmap(0, 0x500, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANON, -1, 0); // not actual size
+    if (fake_shellcore_sysentvec == MAP_FAILED)
+        die();
+
+    copyout(fake_shellcore_sysentvec, offsets.sysentvec, 0x500);
+    *((uint64_t*)(fake_shellcore_sysentvec + sv_table)) = fake_shellcore_ps5_sv_table;
+
+    uint64_t fake_sysentvec_for_shellcore = (uint64_t)kmalloc(0x500);
+    copyin(fake_sysentvec_for_shellcore, fake_shellcore_sysentvec, 0x500);
+
+    int shellcore_pid = find_proc("SceShellCore");
+    if (shellcore_pid <= 0)
+        die();
+
+    uint64_t shellcore_proc = kernel_get_proc(shellcore_pid);
+    if (!shellcore_proc)
+        die();
+
+    copyin(shellcore_proc + offsets.p_sysent, &fake_sysentvec_for_shellcore, 8);
+#else
     copyin(offsets.sysentvec + 14, &(const uint16_t[1]){0xdeb7}, 2); //native sysentvec
     copyin(offsets.sysentvec_ps4 + 14, &(const uint16_t[1]){0xdeb7}, 2); //ps4 sysentvec
+#endif
     copyin(offsets.crypt_singleton_array + 11*8 + 2*8 + 6, &(const uint16_t[1]){0xdeb7}, 2); //crypt xts
     copyin(offsets.crypt_singleton_array + 11*8 + 9*8 + 6, &(const uint16_t[1]){0xdeb7}, 2); //crypt hmac
 
@@ -960,53 +1127,15 @@ int main(void* ds, int a, int b, uintptr_t c, uintptr_t d)
     }
 
     gdb_remote_syscall("write", 3, 0, (uintptr_t)1, (uintptr_t)"done\n", (uintptr_t)5);
-    #ifndef DEBUG
-    //notify("ps5-kstuff successfully loaded");
+#ifndef DEBUG
 
-    // Extract BCD parts
-    int major_bcd = (fwver >> 8) & 0xFF;   // major version in BCD
-    int minor_bcd = fwver & 0xFF;          // minor version in BCD
+    const char *console_type = sceKernelIsDevKit() ? "Devkit" : 
+                               sceKernelIsTestKit() ? "Testkit" : 
+                               "Retail";
 
-    // Convert BCD → decimal
-    int major = (major_bcd >> 4) * 10 + (major_bcd & 0xF);
-    int minor_dec = (minor_bcd >> 4) * 10 + (minor_bcd & 0xF);
-
-    char msg[64], *p = msg;
-
-    // Header
-    const char *hdr =
-        "Welcome To Kstuff Lite 1.2-dr-test1\nPlayStation 5 FW: ";
-    while (*hdr) *p++ = *hdr++;
-
-    // Major
-    if (major >= 10)
-        *p++ = '0' + major / 10;
-    *p++ = '0' + major % 10;
-
-    // Minor
-    *p++ = '.';
-    *p++ = '0' + minor_dec / 10;
-    *p++ = '0' + minor_dec % 10;
-
-    *p++ = ' ';
-
-    const char *t;
-
-    if (sceKernelIsDevKit())
-        t = "(Devkit)";
-    else if (sceKernelIsTestKit())
-        t = "(Testkit)";
-    else
-        t = "(Retail)";
-
-    while (*t)
-        *p++ = *t++;
-
-    // Footer
-    const char *ftr = "\nBy sleirsgoevy";
-    while (*ftr) *p++ = *ftr++;
-
-    *p = 0;
+    char msg[128];
+    snprintf(msg, sizeof(msg), "Welcome To Kstuff Lite 1.09\nPlayStation 5 FW: %x.%02x (%s)\nBy sleirsgoevy", 
+             fwver >> 8, fwver & 0xFF, console_type);
     notify(msg);
 	
     return 0;

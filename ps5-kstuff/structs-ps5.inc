@@ -22,12 +22,15 @@
 %define td_proc 8
 %define td_pcb 0x3f8
 %define td_retval 0x408
+%define td_frame 0x460
 
 %define p_pid 0xbc
 
 %define pcb_fsbase 0x40 //+10 10.0x
 %define pcb_gsbase 0x48 //+10 10.0x
 %define pcb_flags 0x100 //+10 10.0x
+
+%define sv_table 0x8
 
 %define syscall_rsp_to_rsi 0x88 //+10 10.0x
 %define syscall_rsp_to_regs_stash 0x110 //+10 10.0x

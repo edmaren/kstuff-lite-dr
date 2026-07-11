@@ -17,15 +17,20 @@
 #include "shared_area.h"
 
 int have_error_code;
+int intno;
 
 extern char syscall_before[];
 extern char syscall_after[];
+extern char p_sysent[];
+extern char sysentvec[];
+extern char sysentvec_ps4[];
 extern struct sysent sysents[];
 extern struct sysent sysents_ps4[];
 extern char doreti_iret[];
 extern char ist4[];
 extern char tss[];
 extern char int1_handler[];
+extern char int3_handler[];
 extern char int13_handler[];
 extern uint64_t wrmsr_args;
 #ifndef FREEBSD
@@ -337,7 +342,8 @@ void handle(uint64_t* regs)
     if(!initial_from_user)
         regs[EFLAGS] |= 0x10000; //RF
     if(__builtin_expect(!initial_from_user && !initial_from_copyio, 1)
-    && __builtin_expect(rip != (uint64_t)syscall_before && rip != (uint64_t)doreti_iret, 1))
+    && __builtin_expect(rip != (uint64_t)syscall_before && rip != (uint64_t)doreti_iret, 1)
+    && __builtin_expect(intno != 3, 1))
     {
 #ifndef FREEBSD
         handle_kernel_trap_fast(regs, rip);
@@ -346,7 +352,17 @@ void handle(uint64_t* regs)
 #endif
         RETURN_HANDLE();
     }
-    if(initial_from_user || initial_from_copyio) //from userspace, or from copyin/copyout
+    else if(intno == 3 && kpeek64(regs[RSP]) == (uint64_t)syscall_after)
+    {
+        int sysno = kpeek64(kpeek64(regs[RDI]+td_frame) + iret_rax);
+        uint64_t proc = kpeek64(regs[RDI]+td_proc);
+        uint64_t proc_sysent = kpeek64(proc + (uint64_t)p_sysent);
+        int is_ps4 = (proc_sysent == (uint64_t)sysentvec_ps4);
+        regs[RAX] = (uint64_t)(is_ps4 ? sysents_ps4 : sysents) + sysno * sizeof(struct sysent);
+        regs[RIP] = kpeek64(regs[RAX] + __builtin_offsetof(struct sysent, sy_call));
+        handle_syscall(regs, 1);
+    }
+    else if(intno == 3 || initial_from_user || initial_from_copyio) //from userspace, or from copyin/copyout
     {
 from_userspace:
         {
@@ -356,7 +372,7 @@ from_userspace:
             //determine correct gsbase for userspace
             uint64_t pcb;
             uint64_t gsbase;
-                if(get_current_pcb_checked(&pcb))
+            if(get_current_pcb_checked(&pcb))
                 RETURN_HANDLE();
             if(copy_from_kernel(&gsbase, get_pcb_field_ptr(pcb, pcb_gsbase), sizeof(gsbase)))
                 RETURN_HANDLE();
@@ -365,10 +381,10 @@ from_userspace:
             if(copy_to_kernel(wrmsr_args, args, sizeof(args)))
                 RETURN_HANDLE();
         }
-        //inject a fake #DB or #GP exception
+        //inject a fake #DB/#BP/#GP exception
         uint64_t stack;
 #ifndef FREEBSD
-        if(!have_error_code)
+        if(intno == 1)
             stack = (uint64_t)ist4;
         else
 #endif
@@ -387,15 +403,22 @@ from_userspace:
             stack -= 48;
             if(copy_to_kernel(stack, &regs[ERRC], 48))
                 RETURN_HANDLE();
-            regs[RIP] = (uint64_t)int13_handler;
         }
         else
         {
             stack -= 40;
             if(copy_to_kernel(stack, &regs[RIP], 40))
                 RETURN_HANDLE();
-            regs[RIP] = (uint64_t)int1_handler;
         }
+
+        
+        if (intno == 1)
+            regs[RIP] = (uint64_t)int1_handler;
+        else if(intno == 3)
+            regs[RIP] = (uint64_t)int3_handler;
+        else if(intno == 13)
+            regs[RIP] = (uint64_t)int13_handler;
+
         regs[CS] = 0x20;
         regs[EFLAGS] = 2;
         regs[RSP] = stack;
@@ -457,6 +480,7 @@ void main(uint64_t just_return)
     regs[RDX] = jr_frame[2];
     regs[RCX] = jr_frame[3];
     regs[RAX] = jr_frame[4];
+    intno = kpeek64(trap_frame+(sizeof(regs)));
     handle(regs);
     copy_to_kernel(trap_frame, regs, sizeof(regs));
 }

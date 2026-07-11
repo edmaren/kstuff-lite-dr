@@ -4,7 +4,8 @@
 struct offset_table offsets;
 extern uint64_t kdata_base;
 
-#define OFFSET(x) offsets.x = kdata_base + x;
+#define KDATA_OFFSET(x) offsets.x = kdata_base + x;
+#define ABSOLUTE_OFFSET(x) offsets.x = x;
 #define DEF(x, y) enum { x = (y) + 0 * sizeof(offsets.x) };
 
 #define START_FW(fw) void set_offsets_ ## fw(void) {

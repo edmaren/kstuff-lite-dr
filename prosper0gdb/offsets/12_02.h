@@ -4,32 +4,32 @@
 #include "../offsets.h"
 
 START_FW(1202)
-DEF(allproc, 0x2885e00) //Confirmed
-DEF(idt, 0x2e88300) //Confirmed
-DEF(gdt_array, 0x2e895e0) //Confirmed
-DEF(tss_array, 0x2e8afe0) //Confirmed
-DEF(pcpu_array, 0x2e9cf00) //Confirmed
-DEF(doreti_iret, -0xa9c9d3) //Confirmed
-DEF(add_rsp_iret, doreti_iret - 7) //Confirmed
-DEF(swapgs_add_rsp_iret, doreti_iret - 10) //Confirmed
-DEF(rep_movsb_pop_rbp_ret, -0xa60246) //Confirmed
-DEF(rdmsr_start, -0xa9e10a) //Confirmed
-DEF(wrmsr_ret, -0xa9f4dc) //Confirmed
-DEF(nop_ret, wrmsr_ret + 2) //Confirmed
+DEF(allproc, 0x2885e00)
+DEF(idt, 0x2e88300)
+DEF(gdt_array, 0x2e895e0)
+DEF(tss_array, 0x2e8afe0)
+DEF(pcpu_array, 0x2e9cf00)
+DEF(doreti_iret, -0xa9c9d3)
+DEF(add_rsp_iret, doreti_iret - 7)
+DEF(swapgs_add_rsp_iret, doreti_iret - 10)
+DEF(rep_movsb_pop_rbp_ret, -0xa60246)
+DEF(rdmsr_start, -0xa9e10a)
+DEF(wrmsr_ret, -0xa9f4dc)
+DEF(nop_ret, wrmsr_ret + 2)
 DEF(dr2gpr_start, -0xaa3b13)
 DEF(gpr2dr_1_start, -0xaa39fa)
 DEF(gpr2dr_2_start, -0xaa3907)
-DEF(mov_cr3_rax_mov_ds, -0xaa3569) //Confirmed
-DEF(mov_rax_cr3, -0x3cf570) //Checked
-DEF(cpu_switch, -0xaa3d00) //Confirmed
+DEF(mov_cr3_rax_mov_ds, -0xaa3569)
+DEF(mov_rax_cr3, -0x3cf570)
+DEF(cpu_switch, -0xaa3d00)
 DEF(mprotect_fix_start, -0x9d4da3)
 DEF(mprotect_fix_end, mprotect_fix_start+6)
-DEF(aslr_fix_start, -0x915668)
-DEF(aslr_fix_end, aslr_fix_start+2)
-DEF(sysents, 0x1af4d0) //Confirmed
-DEF(sysents_ps4, 0x1a6f80) //Confirmed
-DEF(sysentvec, 0xdcc978) //Confirmed
-DEF(sysentvec_ps4, 0xdccaf0) //Confirmed
+DEF(aslr_fix_start, -0x915658)
+DEF(aslr_fix_end, aslr_fix_start-0xE)
+DEF(sysents, 0x1af4d0)
+DEF(sysents_ps4, 0x1a6f80)
+DEF(sysentvec, 0xdcc978)
+DEF(sysentvec_ps4, 0xdccaf0)
 DEF(sceSblServiceMailbox, -0x714c00)
 DEF(sceSblAuthMgrSmIsLoadable2, -0x968080)
 DEF(syscall_before, -0x8b6344)
@@ -59,16 +59,20 @@ DEF(sceSblServiceCryptAsync_deref_singleton, -0x9B6EF6)
 DEF(copyin, -0xa60bf0)
 DEF(copyout, -0xa60ca0)
 DEF(crypt_message_resolve, -0x4C0310)
-DEF(justreturn, -0xa9cc00) //Confirmed
-DEF(justreturn_pop, justreturn+8) //Confirmed
-DEF(mini_syscore_header, 0xf34228) //Confirmed
-DEF(pop_all_iret, -0xa9ca32) //Confirmed
-DEF(pop_all_except_rdi_iret, pop_all_iret+4) //Confirmed
-DEF(push_pop_all_iret, -0xa37668) //Confirmed
-DEF(kernel_pmap_store, 0x2e1cfb8) //Confirmed
-DEF(crypt_singleton_array, 0x2d61e30) //Confirmed
+DEF(justreturn, -0xa9cc00)
+DEF(justreturn_pop, justreturn+8)
+DEF(mini_syscore_header, 0xf34228)
+DEF(pop_all_iret, -0xa9ca32)
+DEF(pop_all_except_rdi_iret, pop_all_iret+4)
+DEF(push_pop_all_iret, -0xa37668)
+DEF(kernel_pmap_store, 0x2e1cfb8)
+DEF(crypt_singleton_array, 0x2d61e30)
 DEF(mov_rax_cr0, -0xaa3c61)
 DEF(mov_cr0_rax, -0xaa3c5c)
+DEF(syscall_cfi_table_jmp_int3, -0xA3CFB0)
+
+// non data-relative offsets
+DEF(p_sysent, 0xA08)
 #include "offset_list.txt"
 END_FW()
 
