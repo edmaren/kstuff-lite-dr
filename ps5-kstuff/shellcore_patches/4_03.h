@@ -31,35 +31,7 @@ static struct shellcore_patch shellcore_patches_403_retail[] = {
     {0x5348C0, "\x48\x31\xC0\xC3", 4}, //PKG Installer
 };
 
-static struct shellcore_patch shellcore_patches_403_testkit[] = {
-    {0x827E26, "\x90\x90\x90\x90\x90", 5}, //disable game error message
-    {0x271DAB, "\x90\xE9", 2}, //PS4 Disc Installer Patch 1
-    {0x271E42, "\x90\xE9", 2}, //PS5 Disc Installer Patch 1
-    {0x271F5B, "\xEB", 1}, //PS4 PKG Installer Patch 1
-    {0x27202F, "\xEB", 1}, //PS5 PKG Installer Patch 1
-    {0x272498, "\x90\xE9", 2}, //PS4 PKG Installer Patch 2
-    {0x272669, "\xeb", 1}, //PS5 PKG Installer Patch 2
-    {0x272A35, "\x90\xE9", 2}, //PS4 PKG Installer Patch 3
-    {0x272AD2, "\x90\xE9", 2}, //PS5 PKG Installer Patch 3
-    {0x53B427, "\xEB", 1}, //PS4 PKG Installer Patch 4
-    {0x53B53C, "\xEB", 1}, //PS5 PKG Installer Patch 4
-    {0x53CE80, "\x48\x31\xC0\xC3", 4}, //PKG Installer
-};
 
-static struct shellcore_patch shellcore_patches_403_devkit[] = {
-    {0x827F96, "\x90\x90\x90\x90\x90", 5}, //disable game error message
-    {0x27231B, "\x90\xE9", 2}, //PS4 Disc Installer Patch 1
-    {0x2723B2, "\x90\xE9", 2}, //PS5 Disc Installer Patch 1
-    {0x2724CB, "\xEB", 1}, //PS4 PKG Installer Patch 1
-    {0x27259F, "\xEB", 1}, //PS5 PKG Installer Patch 1
-    {0x272A08, "\x90\xE9", 2}, //PS4 PKG Installer Patch 2
-    {0x272BD9, "\xeb", 1}, //PS5 PKG Installer Patch 2
-    {0x272FA5, "\x90\xE9", 2}, //PS4 PKG Installer Patch 3
-    {0x273042, "\x90\xE9", 2}, //PS5 PKG Installer Patch 3
-    {0x53B597, "\xEB", 1}, //PS4 PKG Installer Patch 4
-    {0x53B6AC, "\xEB", 1}, //PS5 PKG Installer Patch 4
-    {0x53CFF0, "\x48\x31\xC0\xC3", 4}, //PKG Installer
-};
 
 #endif // SHELLCORE_PATCHES_4_03
 

@@ -32,10 +32,6 @@ static struct shellcore_patch shellcore_patches_650_retail[] = {
     {0x5d72e0, "\x48\x31\xC0\xC3", 4}, //PKG Installer
 };
 
-static struct shellcore_patch shellcore_patches_650_testkit[] = {
-};
 
-static struct shellcore_patch shellcore_patches_650_devkit[] = {
-};
 
 #endif // SHELLCORE_PATCHES_6_50

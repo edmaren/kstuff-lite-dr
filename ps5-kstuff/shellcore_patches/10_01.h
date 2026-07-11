@@ -36,10 +36,6 @@ static struct shellcore_patch shellcore_patches_1001_retail[] = {
 };
 
 
-static struct shellcore_patch shellcore_patches_1001_testkit[] = {
-};
 
-static struct shellcore_patch shellcore_patches_1001_devkit[] = {
-};
 
 #endif // SHELLCORE_PATCHES_10_01

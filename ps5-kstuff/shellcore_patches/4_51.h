@@ -31,22 +31,6 @@ static struct shellcore_patch shellcore_patches_451_retail[] = {
     {0x535170, "\x48\x31\xc0\xc3", 4}, //PKG Installer
 };
 
-static struct shellcore_patch shellcore_patches_451_testkit[] = {
-};
 
-static struct shellcore_patch shellcore_patches_451_devkit[] = {
-    {0x828936, "\x90\x90\x90\x90\x90", 5}, //disable game error message
-    {0x272A4B, "\x90\xE9", 2}, //PS4 Disc Installer Patch 1
-    {0x272AE2, "\x90\xE9", 2}, //PS5 Disc Installer Patch 1
-    {0x272BFB, "\xEB", 1}, //PS4 PKG Installer Patch 1
-    {0x272CCF, "\xEB", 1}, //PS5 PKG Installer Patch 1
-    {0x273138, "\x90\xE9", 2}, //PS4 PKG Installer Patch 2
-    {0x273309, "\xeb", 1}, //PS5 PKG Installer Patch 2
-    {0x2736D5, "\x90\xE9", 2}, //PS4 PKG Installer Patch 3
-    {0x273772, "\x90\xE9", 2}, //PS5 PKG Installer Patch 3
-    {0x53BE67, "\xEB", 1}, //PS4 PKG Installer Patch 4
-    {0x53BF7C, "\xEB", 1}, //PS5 PKG Installer Patch 4
-    {0x53D8C0, "\x48\x31\xC0\xC3", 4}, //PKG Installer
-};
 
 #endif // SHELLCORE_PATCHES_4_51

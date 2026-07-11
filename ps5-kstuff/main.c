@@ -601,51 +601,12 @@ uint64_t get_eh_frame_offset(const char* path)
     return eh_frame;
 }
 
-bool if_exists(const char *path) {
-    struct stat buffer;
-    return stat(path, &buffer) == 0;
-}
-
-bool sceKernelIsTestKit(void) {
-    return if_exists("/system/priv/lib/libSceDeci5Ttyp.sprx");
-}
-
-bool sceKernelIsDevKit(void) {
-    return if_exists("/system/priv/lib/libSceDeci5Dtracep.sprx");
-}
-
-enum kit_type {
-    KIT_RETAIL,
-    KIT_TESTKIT,
-    KIT_DEVKIT
-};
-
-static enum kit_type get_kit_type(void) {
-    if (sceKernelIsDevKit())   return KIT_DEVKIT;
-    if (sceKernelIsTestKit())  return KIT_TESTKIT;
-    return KIT_RETAIL;
-}
-
 static const struct shellcore_patch* get_shellcore_patches(size_t* n_patches)
 {
-enum kit_type kit = get_kit_type();
-	
 #define FW(x) \
     case 0x ## x:\
-        switch (kit) { \
-            case KIT_DEVKIT: \
-                *n_patches = sizeof(shellcore_patches_##x##_devkit) / sizeof(*shellcore_patches_##x##_devkit);\
-                patches = shellcore_patches_##x##_devkit;\
-                break; \
-            case KIT_TESTKIT: \
-                *n_patches = sizeof(shellcore_patches_##x##_testkit) / sizeof(*shellcore_patches_##x##_testkit);\
-                patches = shellcore_patches_##x##_testkit;\
-                break; \
-            case KIT_RETAIL: \
-                *n_patches = sizeof(shellcore_patches_##x##_retail) / sizeof(*shellcore_patches_##x##_retail);\
-                patches = shellcore_patches_##x##_retail;\
-                break; \
-        } \
+        *n_patches = sizeof(shellcore_patches_##x##_retail) / sizeof(*shellcore_patches_##x##_retail);\
+        patches = shellcore_patches_##x##_retail;\
         break
 	
     uint32_t ver = r0gdb_get_fw_version() >> 16;
@@ -800,24 +761,11 @@ int main(void* ds, int a, int b, uintptr_t c, uintptr_t d)
 #endif
 
 #ifdef USE_INT3_SYSCALL_HOOK
-    // this jmp to int3 exists because sony fills certain functions with int3 depending on the console type
-    // retails have the most of these redacted functions, testkits less, devkits even less, presumably "DevKit Intdev" has none
-    // the built in offsets are mostly from retail firmwares so for kits we need to find them again
-    int is_kit = sceKernelIsTestKit() || sceKernelIsDevKit();
-    if (offsets.syscall_cfi_table_jmp_int3 == kdata_base || is_kit) {
+    if (offsets.syscall_cfi_table_jmp_int3 == kdata_base) {
         offsets.syscall_cfi_table_jmp_int3 = r0gdb_find_syscall_cfi_table_jmp_int3_addr();
         if (offsets.syscall_cfi_table_jmp_int3 == 0 || offsets.syscall_cfi_table_jmp_int3 == kdata_base)
             die();
-
-        // from the 1 fw i checked, everything redacted on kits is also redacted on retails
-        // so kit offsets should work on retails, but to be safe, in case this changes in the future
-        // only report the offset if from a retail console
-        if (!is_kit) {
-            int64_t syscall_cfi_table_jmp_int3_offset = offsets.syscall_cfi_table_jmp_int3 - kdata_base;
-            char log[128];
-            snprintf(log, sizeof(log), "syscall_cfi_table_jmp_int3 offset missing.\nPlease contribute this offset: %s0x%llx", (offsets.syscall_cfi_table_jmp_int3 > kdata_base) ? "+" : "-", (syscall_cfi_table_jmp_int3_offset > 0) ? syscall_cfi_table_jmp_int3_offset : -syscall_cfi_table_jmp_int3_offset);
-            notify(log);
-        }
+        notify("syscall_cfi_table_jmp_int3 offset missing. Please report your firmware.");
     }
 #endif
 
@@ -1128,16 +1076,19 @@ int main(void* ds, int a, int b, uintptr_t c, uintptr_t d)
 
     gdb_remote_syscall("write", 3, 0, (uintptr_t)1, (uintptr_t)"done\n", (uintptr_t)5);
 #ifndef DEBUG
-
-    const char *console_type = sceKernelIsDevKit() ? "Devkit" : 
-                               sceKernelIsTestKit() ? "Testkit" : 
-                               "Retail";
-
-    char msg[128];
-    snprintf(msg, sizeof(msg), "Welcome To Kstuff Lite 1.09\nPlayStation 5 FW: %x.%02x (%s)\nBy sleirsgoevy", 
-             fwver >> 8, fwver & 0xFF, console_type);
+    char msg[128]; char *p = msg;
+    const char *h = "Welcome To Kstuff Lite 1.2-dr-noPTK\nPlayStation 5 FW: ";
+    while (*h) *p++ = *h++;
+    unsigned int fw_maj = fwver >> 8;
+    unsigned int fw_min = fwver & 0xFF;
+    if (fw_maj >= 0x10) *p++ = "0123456789abcdef"[fw_maj >> 4];
+    *p++ = "0123456789abcdef"[fw_maj & 0xF];
+    *p++ = '.';
+    *p++ = "0123456789abcdef"[(fw_min >> 4) & 0xF];
+    *p++ = "0123456789abcdef"[fw_min & 0xF];
+    const char *f = "\nBy sleirsgoevy"; while (*f) *p++ = *f++;
+    *p = 0;
     notify(msg);
-	
     return 0;
 #endif
     asm volatile("ud2");
